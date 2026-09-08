@@ -1,0 +1,6 @@
+/dist/
+/test-output
+*.test
+.env
+.env.*
+!.env.example
