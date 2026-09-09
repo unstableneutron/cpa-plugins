@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,7 +130,9 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	if err = json.Unmarshal(req.Payload, &body); err != nil {
 		return nil, failure("invalid_request", "decode chat-completions payload: "+err.Error(), http.StatusBadRequest, "request")
 	}
-	body["model"] = stripPrefix(req.Model)
+	model, suffix := modelSuffix(stripPrefix(req.Model))
+	body["model"] = model
+	applyOpenAIThinking(body, suffix, false)
 	body["stream"] = true
 	body["stream_options"] = map[string]any{"include_usage": true}
 	payload, _ := json.Marshal(body)
@@ -145,7 +148,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		}
 		if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
 			_ = closeHostStream(upstream.StreamID)
-			return nil, failure("upstream_http_error", fmt.Sprintf("codebuddy returned HTTP %d", upstream.StatusCode), upstream.StatusCode, scopeForStatus(upstream.StatusCode))
+			return nil, upstreamFailure(fmt.Sprintf("codebuddy returned HTTP %d", upstream.StatusCode), upstream.StatusCode, upstream.Headers)
 		}
 		go forwardStream(req.StreamID, upstream.StreamID)
 		return map[string]any{"headers": upstream.Headers}, nil
@@ -156,7 +159,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		return nil, hostFailure(err)
 	}
 	if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
-		return nil, failure("upstream_http_error", string(upstream.Body), upstream.StatusCode, scopeForStatus(upstream.StatusCode))
+		return nil, upstreamFailure(string(upstream.Body), upstream.StatusCode, upstream.Headers)
 	}
 	aggregated, err := aggregateSSE(upstream.Body)
 	if err != nil {
@@ -470,7 +473,29 @@ func scopeForStatus(status int) string {
 	if status == 404 {
 		return "model"
 	}
-	return "request"
+	return ""
+}
+
+func upstreamFailure(message string, status int, headers http.Header) *nativeabi.Error {
+	f := failure("upstream_http_error", message, status, scopeForStatus(status))
+	f.RetryAfterMS = retryAfterMS(headers)
+	return f
+}
+
+func retryAfterMS(headers http.Header) *int64 {
+	value := strings.TrimSpace(headers.Get("Retry-After"))
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		milliseconds := seconds * 1000
+		return &milliseconds
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		milliseconds := time.Until(at).Milliseconds()
+		if milliseconds < 0 {
+			milliseconds = 0
+		}
+		return &milliseconds
+	}
+	return nil
 }
 
 func aggregateSSE(raw []byte) ([]byte, error) {
@@ -580,6 +605,50 @@ func aggregateSSE(raw []byte) ([]byte, error) {
 	return json.Marshal(result)
 }
 func number(v any) float64 { n, _ := v.(float64); return n }
+
+func modelSuffix(model string) (string, string) {
+	open := strings.LastIndex(model, "(")
+	if open < 0 || !strings.HasSuffix(model, ")") {
+		return model, ""
+	}
+	return model[:open], model[open+1 : len(model)-1]
+}
+
+func applyOpenAIThinking(body map[string]any, suffix string, responses bool) {
+	effort := strings.ToLower(strings.TrimSpace(suffix))
+	if budget, err := strconv.Atoi(effort); err == nil && budget >= 0 {
+		switch {
+		case budget == 0:
+			effort = "none"
+		case budget <= 512:
+			effort = "minimal"
+		case budget <= 1024:
+			effort = "low"
+		case budget <= 8192:
+			effort = "medium"
+		case budget <= 24576:
+			effort = "high"
+		default:
+			effort = "xhigh"
+		}
+	}
+	switch effort {
+	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
+	default:
+		return
+	}
+	if responses {
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = make(map[string]any)
+			body["reasoning"] = reasoning
+		}
+		reasoning["effort"] = effort
+		return
+	}
+	body["reasoning_effort"] = effort
+}
+
 func sortedKeys[T any](values map[int]T) []int {
 	keys := make([]int, 0, len(values))
 	for key := range values {

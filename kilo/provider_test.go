@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -24,7 +25,7 @@ func TestExecuteUsesKiloOpenRouterProtocol(t *testing.T) {
 	}
 	t.Cleanup(runtime.Shutdown)
 	stored, _ := json.Marshal(storage{Token: "token", OrganizationID: "org"})
-	req, _ := json.Marshal(executorRequest{Model: "kilo/openai/gpt-5", Payload: []byte(`{"messages":[]}`), StorageJSON: stored})
+	req, _ := json.Marshal(executorRequest{Model: "kilo/openai/gpt-5(9000)", Payload: []byte(`{"messages":[]}`), StorageJSON: stored, Headers: http.Header{"X-Trace": {"from-client"}}, AuthAttributes: map[string]string{"header:X-Static": "set", "header:X-Copied": "$X-Trace"}})
 	result, callErr := (provider{}).Call("executor.execute", req)
 	if callErr != nil {
 		t.Fatal(callErr)
@@ -38,6 +39,15 @@ func TestExecuteUsesKiloOpenRouterProtocol(t *testing.T) {
 	headers := outbound["headers"].(map[string]any)
 	if headers["X-Kilocode-Organizationid"].([]any)[0] != "org" {
 		t.Fatalf("headers = %#v", headers)
+	}
+	if headers["X-Static"].([]any)[0] != "set" || headers["X-Copied"].([]any)[0] != "from-client" {
+		t.Fatalf("custom headers = %#v", headers)
+	}
+	bodyRaw, _ := base64.StdEncoding.DecodeString(outbound["body"].(string))
+	var body map[string]any
+	_ = json.Unmarshal(bodyRaw, &body)
+	if body["model"] != "openai/gpt-5" || body["reasoning_effort"] != "high" {
+		t.Fatalf("outbound body = %#v", body)
 	}
 }
 
@@ -61,5 +71,24 @@ func TestHeadersPreserveOrganizationAndStream(t *testing.T) {
 func TestStripProviderKeepsOpenRouterModel(t *testing.T) {
 	if got := stripProvider("kilo/openai/gpt-5"); got != "openai/gpt-5" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestRPCUpstreamThrottlePreservesCooldownClassification(t *testing.T) {
+	runtime = nativeabi.Runtime{}
+	if err := runtime.Initialize(provider{}, func(_ string, _ []byte) ([]byte, int) {
+		result, _ := json.Marshal(httpResponse{StatusCode: http.StatusTooManyRequests, Headers: http.Header{"Retry-After": {"3"}}, Body: []byte(`{"error":"limited"}`)})
+		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
+		return envelope, 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.Shutdown)
+	stored, _ := json.Marshal(storage{Token: "token"})
+	req, _ := json.Marshal(executorRequest{Model: "kilo/openai/gpt-5", Payload: []byte(`{"messages":[]}`), StorageJSON: stored})
+	raw, status := runtime.Call("executor.execute", req)
+	var envelope nativeabi.Envelope
+	if status == 0 || json.Unmarshal(raw, &envelope) != nil || envelope.Error == nil || envelope.Error.Scope != "" || envelope.Error.RetryAfterMS == nil || *envelope.Error.RetryAfterMS != 3000 {
+		t.Fatalf("status=%d failure=%#v raw=%s", status, envelope.Error, raw)
 	}
 }

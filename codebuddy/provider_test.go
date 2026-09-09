@@ -33,7 +33,7 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 		return envelope, 0
 	})
 	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
-	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm", Payload: []byte(`{"model":"ignored","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
+	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm(high)", Payload: []byte(`{"model":"ignored","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
 	result, callErr := (provider{}).Call("executor.execute", req)
 	if callErr != nil {
 		t.Fatal(callErr)
@@ -48,6 +48,12 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 	}
 	if outbound["url"] != baseURL+"/v2/chat/completions" {
 		t.Fatalf("url = %#v", outbound["url"])
+	}
+	bodyRaw, _ := base64.StdEncoding.DecodeString(outbound["body"].(string))
+	var body map[string]any
+	_ = json.Unmarshal(bodyRaw, &body)
+	if body["model"] != "glm" || body["reasoning_effort"] != "high" {
+		t.Fatalf("outbound body = %#v", body)
 	}
 }
 
@@ -144,6 +150,27 @@ func TestForwardStreamContainsPanicAndClosesOnce(t *testing.T) {
 	forwardStream("plugin-stream", "host-stream")
 	if reads != 1 || pluginCloses != 1 || hostCloses != 1 {
 		t.Fatalf("reads=%d plugin closes=%d host closes=%d", reads, pluginCloses, hostCloses)
+	}
+}
+
+func TestRPCUpstreamThrottlePreservesCooldownClassification(t *testing.T) {
+	initializeTestRuntime(t, func(_ string, _ []byte) ([]byte, int) {
+		result, _ := json.Marshal(httpResponse{StatusCode: http.StatusTooManyRequests, Headers: http.Header{"Retry-After": {"7"}}, Body: []byte(`{"error":"limited"}`)})
+		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
+		return envelope, 0
+	})
+	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
+	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm", Payload: []byte(`{"messages":[]}`), StorageJSON: storageJSON})
+	raw, status := runtime.Call("executor.execute", req)
+	if status == 0 {
+		t.Fatalf("status = 0, response = %s", raw)
+	}
+	var envelope nativeabi.Envelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error == nil || envelope.Error.Scope != "" || envelope.Error.RetryAfterMS == nil || *envelope.Error.RetryAfterMS != 7000 {
+		t.Fatalf("failure = %#v", envelope.Error)
 	}
 }
 

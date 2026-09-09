@@ -7,6 +7,9 @@ sources: `internal/runtime/executor/codebuddy_executor.go`,
 
 Implemented here are CodeBuddy browser-state login, polling, refresh, auth
 parsing, the complete pinned model catalog, OpenAI chat request/response
-handling, tool/reasoning/usage aggregation, and incremental SSE forwarding.
-All outbound requests use host HTTP callbacks. Plus's payload-config and
-thinking-suffix transforms are not yet extracted.
+handling, thinking suffixes, tool/reasoning/usage aggregation, and incremental
+SSE forwarding. All outbound requests use host HTTP callbacks. Global host
+payload override rules remain host-owned rather than duplicated in this plugin.
+Upstream 401/403 failures are credential-scoped, 404 is model-scoped, and
+throttling/server failures remain unscoped so host health cooldown applies;
+`Retry-After` is propagated through the typed failure envelope.

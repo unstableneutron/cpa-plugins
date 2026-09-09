@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +99,7 @@ func (provider) Call(method string, raw json.RawMessage) (any, *nativeabi.Error)
 	case "executor.execute_stream":
 		return execute(raw, true)
 	case "executor.count_tokens":
-		return nil, fail("unsupported", "GitHub Copilot has no token-count endpoint", 501, "request")
+		return countTokens(raw)
 	case "executor.http_request":
 		return rawHTTP(raw)
 	default:
@@ -120,8 +121,9 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		return nil, f
 	}
 	format := first(req.SourceFormat, req.Format, "chat-completions")
+	model, suffix := modelSuffix(strip(req.Model))
 	path := "/chat/completions"
-	if format == "responses" || format == "openai-response" {
+	if format == "responses" || format == "openai-response" || strings.Contains(strings.ToLower(model), "codex") {
 		path = "/responses"
 	} else if format == "claude" {
 		path = "/v1/messages"
@@ -130,8 +132,10 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	if err = json.Unmarshal(req.Payload, &body); err != nil {
 		return nil, fail("invalid_request", err.Error(), 400, "request")
 	}
-	body["model"] = strip(req.Model)
+	body["model"] = model
 	body["stream"] = stream
+	normalizeCopilotRequest(body, path)
+	applyThinkingSuffix(body, suffix, path)
 	if stream && path == "/chat/completions" {
 		body["stream_options"] = map[string]any{"include_usage": true}
 	}
@@ -150,7 +154,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		}
 		if up.StatusCode < 200 || up.StatusCode >= 300 {
 			_ = closeHost(up.StreamID)
-			return nil, fail("upstream_http_error", fmt.Sprintf("GitHub Copilot returned HTTP %d", up.StatusCode), up.StatusCode, statusScope(up.StatusCode))
+			return nil, upstreamFailure(fmt.Sprintf("GitHub Copilot returned HTTP %d", up.StatusCode), up.StatusCode, up.Headers)
 		}
 		go forward(req.StreamID, up.StreamID)
 		return map[string]any{"headers": up.Headers}, nil
@@ -160,7 +164,10 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		return nil, hostFail(err)
 	}
 	if up.StatusCode < 200 || up.StatusCode >= 300 {
-		return nil, fail("upstream_http_error", string(up.Body), up.StatusCode, statusScope(up.StatusCode))
+		return nil, upstreamFailure(string(up.Body), up.StatusCode, up.Headers)
+	}
+	if path == "/chat/completions" {
+		up.Body = normalizeCopilotReasoning(up.Body)
 	}
 	return map[string]any{"Payload": up.Body, "Headers": up.Headers}, nil
 }
@@ -518,5 +525,25 @@ func statusScope(s int) string {
 	if s == 404 {
 		return "model"
 	}
-	return "request"
+	return ""
+}
+func upstreamFailure(message string, status int, headers http.Header) *nativeabi.Error {
+	f := fail("upstream_http_error", message, status, statusScope(status))
+	f.RetryAfterMS = retryAfterMS(headers)
+	return f
+}
+func retryAfterMS(headers http.Header) *int64 {
+	value := strings.TrimSpace(headers.Get("Retry-After"))
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		milliseconds := seconds * 1000
+		return &milliseconds
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		milliseconds := time.Until(at).Milliseconds()
+		if milliseconds < 0 {
+			milliseconds = 0
+		}
+		return &milliseconds
+	}
+	return nil
 }

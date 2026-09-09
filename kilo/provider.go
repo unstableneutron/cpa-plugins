@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type registration struct {
 type executorRequest struct {
 	Model                string
 	Payload, StorageJSON []byte
+	Headers              http.Header
 	AuthMetadata         map[string]any
 	AuthAttributes       map[string]string
 	StreamID             string `json:"stream_id"`
@@ -101,10 +103,13 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	if err = json.Unmarshal(req.Payload, &body); err != nil {
 		return nil, fail("invalid_request", err.Error(), 400, "request")
 	}
-	body["model"] = stripProvider(req.Model)
+	model, suffix := modelSuffix(stripProvider(req.Model))
+	body["model"] = model
+	applyOpenAIThinking(body, suffix)
 	body["stream"] = stream
 	payload, _ := json.Marshal(body)
 	headers := headersFor(s, stream)
+	applyCustomHeaders(headers, req.AuthAttributes, req.Headers)
 	if stream {
 		if req.StreamID == "" {
 			return nil, fail("invalid_request", "stream_id is required", 400, "request")
@@ -115,7 +120,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		}
 		if up.StatusCode < 200 || up.StatusCode >= 300 {
 			_ = closeHost(up.StreamID)
-			return nil, fail("upstream_http_error", fmt.Sprintf("kilo returned HTTP %d", up.StatusCode), up.StatusCode, statusScope(up.StatusCode))
+			return nil, upstreamFailure(fmt.Sprintf("kilo returned HTTP %d", up.StatusCode), up.StatusCode, up.Headers)
 		}
 		go forward(req.StreamID, up.StreamID)
 		return map[string]any{"headers": up.Headers}, nil
@@ -125,7 +130,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		return nil, hostFail(err)
 	}
 	if up.StatusCode < 200 || up.StatusCode >= 300 {
-		return nil, fail("upstream_http_error", string(up.Body), up.StatusCode, statusScope(up.StatusCode))
+		return nil, upstreamFailure(string(up.Body), up.StatusCode, up.Headers)
 	}
 	return map[string]any{"Payload": up.Body, "Headers": up.Headers}, nil
 }
@@ -374,6 +379,51 @@ func stripProvider(s string) string {
 	}
 	return s
 }
+func modelSuffix(model string) (string, string) {
+	open := strings.LastIndex(model, "(")
+	if open < 0 || !strings.HasSuffix(model, ")") {
+		return model, ""
+	}
+	return model[:open], model[open+1 : len(model)-1]
+}
+func applyOpenAIThinking(body map[string]any, suffix string) {
+	effort := strings.ToLower(strings.TrimSpace(suffix))
+	if budget, err := strconv.Atoi(effort); err == nil && budget >= 0 {
+		switch {
+		case budget == 0:
+			effort = "none"
+		case budget <= 512:
+			effort = "minimal"
+		case budget <= 1024:
+			effort = "low"
+		case budget <= 8192:
+			effort = "medium"
+		case budget <= 24576:
+			effort = "high"
+		default:
+			effort = "xhigh"
+		}
+	}
+	switch effort {
+	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
+		body["reasoning_effort"] = effort
+	}
+}
+func applyCustomHeaders(headers http.Header, attributes map[string]string, clientHeaders http.Header) {
+	for key, value := range attributes {
+		if !strings.HasPrefix(key, "header:") {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimPrefix(key, "header:"))
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "$") {
+			value = clientHeaders.Get(strings.TrimSpace(strings.TrimPrefix(value, "$")))
+		}
+		if name != "" && value != "" {
+			headers.Set(name, value)
+		}
+	}
+}
 func safe(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("@._-", r) {
@@ -398,5 +448,25 @@ func statusScope(s int) string {
 	if s == 404 {
 		return "model"
 	}
-	return "request"
+	return ""
+}
+func upstreamFailure(message string, status int, headers http.Header) *nativeabi.Error {
+	f := fail("upstream_http_error", message, status, statusScope(status))
+	f.RetryAfterMS = retryAfterMS(headers)
+	return f
+}
+func retryAfterMS(headers http.Header) *int64 {
+	value := strings.TrimSpace(headers.Get("Retry-After"))
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		milliseconds := seconds * 1000
+		return &milliseconds
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		milliseconds := time.Until(at).Milliseconds()
+		if milliseconds < 0 {
+			milliseconds = 0
+		}
+		return &milliseconds
+	}
+	return nil
 }
