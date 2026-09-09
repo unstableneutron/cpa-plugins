@@ -221,6 +221,21 @@ func TestUpstreamFailureScopesAndRetryHint(t *testing.T) {
 	}
 }
 
+func TestCredentialAliasesAndCanonicalEnvironmentPrecedence(t *testing.T) {
+	t.Setenv("COMMAND_CODE_API_KEY", "canonical")
+	t.Setenv("COMMANDCODE_API_KEY", "legacy")
+	t.Setenv("COMMANDCODE_API_URL", "https://canonical.example")
+	t.Setenv("COMMANDCODE_API_BASE", "https://legacy.example")
+	baseURL, apiKey := credentials(nil, nil, nil)
+	if baseURL != "https://canonical.example" || apiKey != "canonical" {
+		t.Fatalf("environment credentials = %q %q", baseURL, apiKey)
+	}
+	baseURL, apiKey = credentials([]byte(`{"baseURL":"https://stored.example","commandcode":{"access":"nested"}}`), nil, nil)
+	if baseURL != "https://stored.example" || apiKey != "nested" {
+		t.Fatalf("stored credentials = %q %q", baseURL, apiKey)
+	}
+}
+
 func TestAsyncStreamPanicClosesOnceWithoutLeakingValue(t *testing.T) {
 	closed := make(chan nativeabi.StreamCloseRequest, 2)
 	var runtime nativeabi.Runtime

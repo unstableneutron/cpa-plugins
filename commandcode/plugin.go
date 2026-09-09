@@ -471,7 +471,17 @@ func authFromRequest(request authModelRequest) authData {
 }
 
 func credentials(storage []byte, metadata map[string]any, attrs map[string]string) (string, string) {
-	baseURL, apiKey := defaultCommandCodeAPIBase, ""
+	baseURL := strings.TrimSpace(os.Getenv("COMMANDCODE_API_URL"))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("COMMANDCODE_API_BASE"))
+	}
+	if baseURL == "" {
+		baseURL = defaultCommandCodeAPIBase
+	}
+	apiKey := strings.TrimSpace(os.Getenv("COMMAND_CODE_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("COMMANDCODE_API_KEY"))
+	}
 	var stored map[string]any
 	_ = json.Unmarshal(storage, &stored)
 	for _, source := range []map[string]any{stored, metadata} {
