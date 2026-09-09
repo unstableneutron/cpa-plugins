@@ -19,11 +19,9 @@ Derived under the included MIT license from
 
 The module has no dependency on CLIProxyAPI or CLIProxyAPIPlus.
 
-## Transport parity limitation
+## Host compatibility
 
 The source transport explicitly sets TLS minimum 1.2, ALPN `h2,http/1.1`, and
-curves `X25519,P-256,P-384,P-521`. Host baseline `47cdb06` supports HTTP/1-only,
-compression, and HTTP/1 header profiles, but it cannot constrain TLS curves.
-The plugin therefore uses the host's normal HTTP/2-capable transport. Exact TLS
-parity requires one bounded host hook: add an optional `tls_curves` list to
-`HTTPWireProfile` and apply it to a profile-private `tls.Config.CurvePreferences`.
+curves `X25519,P-256,P-384,P-521`. Every Bedrock request selects those curves
+through `wire_profile.tls_curves`; normal host transport preserves TLS 1.2+
+and HTTP/2 ALPN behavior. The plugin therefore requires CPA schema 8 or newer.

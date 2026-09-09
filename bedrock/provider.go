@@ -29,6 +29,7 @@ type HTTPWireProfile struct {
 	HTTP1Only              bool     `json:"http1_only,omitempty"`
 	DisableAutoCompression bool     `json:"disable_auto_compression,omitempty"`
 	HeaderProfile          []string `json:"header_profile,omitempty"`
+	TLSCurves              []string `json:"tls_curves,omitempty"`
 }
 
 type HTTPResponse struct {
@@ -222,7 +223,13 @@ func buildHTTPRequest(plan invokePlan, auth Auth, stream bool) HTTPRequest {
 	for key, value := range auth.CustomHeaders {
 		headers[key] = []string{value}
 	}
-	return HTTPRequest{Method: http.MethodPost, URL: plan.URL, Headers: headers, Body: plan.Payload}
+	return HTTPRequest{
+		Method:      http.MethodPost,
+		URL:         plan.URL,
+		Headers:     headers,
+		Body:        plan.Payload,
+		WireProfile: &HTTPWireProfile{TLSCurves: []string{"X25519", "P-256", "P-384", "P-521"}},
+	}
 }
 
 func eventStreamException(msg BedrockEventStreamMessage) error {

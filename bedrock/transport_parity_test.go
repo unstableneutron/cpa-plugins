@@ -1,23 +1,23 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
-// This fixture records the explicit Plus transport contract. It is deliberately
-// separate from HTTPWireProfile: schema 7 cannot currently express TLS curves.
 func TestBedrockSourceWireProfileFixture(t *testing.T) {
-	wantALPN := []string{"h2", "http/1.1"}
 	wantCurves := []string{"X25519", "P-256", "P-384", "P-521"}
-	if !reflect.DeepEqual(wantALPN, []string{"h2", "http/1.1"}) {
-		t.Fatal("Bedrock ALPN fixture changed")
+	request := buildHTTPRequest(invokePlan{URL: "https://bedrock.example/model", Payload: []byte(`{}`)}, Auth{}, false)
+	if request.WireProfile == nil || !reflect.DeepEqual(request.WireProfile.TLSCurves, wantCurves) {
+		t.Fatalf("wire profile = %+v, want curves %v", request.WireProfile, wantCurves)
 	}
-	if !reflect.DeepEqual(wantCurves, []string{"X25519", "P-256", "P-384", "P-521"}) {
-		t.Fatal("Bedrock curve fixture changed")
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var hostProfile HTTPWireProfile
-	if hostProfile.HTTP1Only || hostProfile.DisableAutoCompression || len(hostProfile.HeaderProfile) != 0 {
-		t.Fatalf("default host profile = %+v", hostProfile)
+	if got, want := string(raw), `"wire_profile":{"tls_curves":["X25519","P-256","P-384","P-521"]}`; !strings.Contains(got, want) {
+		t.Fatalf("request JSON = %s, want fragment %s", got, want)
 	}
 }

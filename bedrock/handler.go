@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	bedrockSchemaVersion        = 8
 	methodExecutorIdentifier    = "executor.identifier"
 	methodExecutorExecute       = "executor.execute"
 	methodExecutorExecuteStream = "executor.execute_stream"
@@ -33,8 +34,8 @@ func (h *pluginHandler) Call(method string, raw json.RawMessage) (any, *nativeab
 	switch method {
 	case nativeabi.MethodPluginRegister, nativeabi.MethodPluginReconfigure:
 		return map[string]any{
-			"schema_version": nativeabi.SchemaVersion,
-			"metadata":       map[string]any{"Name": "Bedrock", "Version": "0.1.0", "Author": "unstableneutron", "GitHubRepository": "https://github.com/unstableneutron/cpa-plugins", "ConfigFields": []any{}},
+			"schema_version": bedrockSchemaVersion,
+			"metadata":       map[string]any{"Name": "Bedrock", "Version": nativeabi.Version, "Author": "unstableneutron", "GitHubRepository": "https://github.com/unstableneutron/cpa-plugins", "ConfigFields": []any{}},
 			"capabilities":   map[string]any{"executor": true, "executor_model_scope": "both", "executor_input_formats": []string{"claude"}, "executor_output_formats": []string{"claude"}},
 		}, nil
 	case methodExecutorIdentifier:
@@ -77,14 +78,19 @@ func decodeStringMap(raw string) map[string]string {
 }
 
 func streamBedrock(req rpcExecutorRequest) {
+	closeReq := nativeabi.StreamCloseRequest{StreamID: req.StreamID}
+	defer func() {
+		if recover() != nil {
+			closeReq.Failure = &nativeabi.Error{Code: "internal", Message: "plugin stream panicked", Scope: "request"}
+		}
+		_ = runtimeABI.HostCall(nativeabi.MethodHostStreamClose, closeReq, nil)
+	}()
 	err := NewProvider(hostTransport{}).ExecuteStream(context.Background(), providerRequest(req), func(payload []byte) error {
 		return runtimeABI.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: req.StreamID, Payload: payload}, nil)
 	})
-	closeReq := nativeabi.StreamCloseRequest{StreamID: req.StreamID}
 	if err != nil {
 		closeReq.Failure = failure(err, "request", "bedrock_stream")
 	}
-	_ = runtimeABI.HostCall(nativeabi.MethodHostStreamClose, closeReq, nil)
 }
 
 type hostTransport struct{}

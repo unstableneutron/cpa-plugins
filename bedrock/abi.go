@@ -16,6 +16,9 @@ extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
 static const cliproxy_host_api* stored_host;
 static void store_host_api(const cliproxy_host_api* host) { stored_host = host; }
+static int valid_host_api(const cliproxy_host_api* host) {
+  return host != NULL && host->call != NULL && host->free_buffer != NULL;
+}
 static int call_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
   if (stored_host == NULL || stored_host->call == NULL) return 1;
   return stored_host->call(stored_host->host_ctx, method, request, request_len, response);
@@ -27,7 +30,6 @@ static void free_host_buffer(void* ptr, size_t len) {
 import "C"
 
 import (
-	"errors"
 	"unsafe"
 
 	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
@@ -39,11 +41,13 @@ func main() {}
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
-	if host == nil || plugin == nil {
+	if plugin == nil || C.valid_host_api(host) == 0 {
+		return 1
+	}
+	if err := runtimeABI.Initialize(&pluginHandler{}, callHost); err != nil {
 		return 1
 	}
 	C.store_host_api(host)
-	runtimeABI.Initialize(&pluginHandler{}, callHost)
 	plugin.abi_version = C.uint32_t(nativeabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -53,11 +57,12 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 
 //export cliproxyPluginCall
 func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
-	if response != nil {
-		response.ptr = nil
-		response.len = 0
+	if response == nil {
+		return 1
 	}
-	if method == nil {
+	response.ptr = nil
+	response.len = 0
+	if method == nil || (request == nil && requestLen != 0) || requestLen > C.size_t(maxInt) {
 		return 1
 	}
 	var payload []byte
@@ -87,7 +92,7 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	response.len = C.size_t(len(raw))
 }
 
-func callHost(method string, payload []byte) ([]byte, error) {
+func callHost(method string, payload []byte) ([]byte, int) {
 	cMethod := C.CString(method)
 	defer C.free(unsafe.Pointer(cMethod))
 	var request *C.uint8_t
@@ -96,12 +101,21 @@ func callHost(method string, payload []byte) ([]byte, error) {
 		defer C.free(unsafe.Pointer(request))
 	}
 	var response C.cliproxy_buffer
-	if status := C.call_host_api(cMethod, request, C.size_t(len(payload)), &response); status != 0 {
-		return nil, errors.New("host callback failed")
-	}
+	status := C.call_host_api(cMethod, request, C.size_t(len(payload)), &response)
 	if response.ptr == nil {
-		return nil, nil
+		if response.len != 0 {
+			return nil, 1
+		}
+		return nil, int(status)
 	}
 	defer C.free_host_buffer(response.ptr, response.len)
-	return C.GoBytes(response.ptr, C.int(response.len)), nil
+	if response.len == 0 {
+		return []byte{}, int(status)
+	}
+	if response.len > C.size_t(maxInt) {
+		return nil, 1
+	}
+	return C.GoBytes(response.ptr, C.int(response.len)), int(status)
 }
+
+const maxInt = int(^uint(0) >> 1)
