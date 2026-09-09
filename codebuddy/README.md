@@ -5,7 +5,8 @@ Native CodeBuddy provider extracted from `unstableneutron/CLIProxyAPIPlus` at
 sources: `internal/runtime/executor/codebuddy_executor.go`,
 `internal/auth/codebuddy/*`, and `internal/registry/codebuddy_models.go`.
 
-The plugin owns CodeBuddy browser-state login, polling, refresh, auth parsing,
-model registration, OpenAI chat request/response handling, tool/reasoning/usage
-aggregation, and incremental SSE forwarding. All outbound requests use the host
-HTTP callbacks so proxy and request logging policy remain host-owned.
+Implemented here are CodeBuddy browser-state login, polling, refresh, auth
+parsing, the complete pinned model catalog, OpenAI chat request/response
+handling, tool/reasoning/usage aggregation, and incremental SSE forwarding.
+All outbound requests use host HTTP callbacks. Plus's payload-config and
+thinking-suffix transforms are not yet extracted.

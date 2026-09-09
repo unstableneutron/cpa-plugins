@@ -555,9 +555,27 @@ func aggregateSSE(raw []byte) ([]byte, error) {
 func number(v any) float64 { n, _ := v.(float64); return n }
 
 func models() []map[string]any {
-	return []map[string]any{
-		{"ID": "auto", "Object": "model", "Created": int64(1748044800), "OwnedBy": "tencent", "Type": providerID, "DisplayName": "Auto", "Description": "Automatic model selection via CodeBuddy", "ContextLength": int64(128000), "MaxCompletionTokens": int64(32768), "SupportedGenerationMethods": []string{"chat"}},
-		{"ID": "glm-5.1", "Object": "model", "Created": int64(1748044800), "OwnedBy": "tencent", "Type": providerID, "DisplayName": "GLM-5.1", "ContextLength": int64(200000), "MaxCompletionTokens": int64(32768), "SupportedGenerationMethods": []string{"chat"}},
-		{"ID": "kimi-k2.6", "Object": "model", "Created": int64(1748044800), "OwnedBy": "tencent", "Type": providerID, "DisplayName": "Kimi K2.6", "ContextLength": int64(256000), "MaxCompletionTokens": int64(32768), "SupportedGenerationMethods": []string{"chat"}},
+	definitions := []struct {
+		id, display string
+		context     int64
+	}{
+		{"auto", "Auto", 128000},
+		{"glm-5v-turbo", "GLM-5v Turbo", 200000},
+		{"glm-5.1", "GLM-5.1", 200000},
+		{"glm-5.0-turbo", "GLM-5.0 Turbo", 200000},
+		{"glm-5.0", "GLM-5.0", 200000},
+		{"glm-4.7", "GLM-4.7", 200000},
+		{"minimax-m2.7", "MiniMax M2.7", 200000},
+		{"minimax-m2.5", "MiniMax M2.5", 200000},
+		{"kimi-k2.5", "Kimi K2.5", 256000},
+		{"kimi-k2.6", "Kimi K2.6", 256000},
+		{"kimi-k2-thinking", "Kimi K2 Thinking", 256000},
+		{"deepseek-v3-2-volc", "DeepSeek V3.2 (Volc)", 128000},
+		{"hy3-preview", "Hy3 Preview", 128000},
 	}
+	result := make([]map[string]any, 0, len(definitions))
+	for _, model := range definitions {
+		result = append(result, map[string]any{"ID": model.id, "Object": "model", "Created": int64(1748044800), "OwnedBy": "tencent", "Type": providerID, "DisplayName": model.display, "ContextLength": model.context, "MaxCompletionTokens": int64(32768), "SupportedGenerationMethods": []string{"chat"}})
+	}
+	return result
 }

@@ -5,7 +5,8 @@ Native Kilo provider extracted from `unstableneutron/CLIProxyAPIPlus` commit
 sources: `internal/runtime/executor/kilo_executor.go`, `internal/auth/kilo/*`,
 and `internal/registry/kilo_models.go`.
 
-The plugin preserves Kilo device authorization, auth parsing, organization
+Implemented here are Kilo device authorization, auth parsing, organization
 routing, dynamic curated-free model discovery, OpenRouter chat payloads, raw
-SSE streaming, errors, cancellation, and usage payloads. Outbound traffic uses
-host HTTP callbacks so proxy and request logging policy remain host-owned.
+SSE streaming, typed errors, cancellation, and usage payload forwarding.
+Outbound traffic uses host HTTP callbacks. Plus's payload-config and
+thinking-suffix transforms are not yet extracted.

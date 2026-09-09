@@ -3,9 +3,43 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
+
+func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
+	var outbound map[string]any
+	runtime.Initialize(provider{}, func(method string, request []byte) ([]byte, int) {
+		if method != "host.http.do" {
+			t.Fatalf("method = %q", method)
+		}
+		if err := json.Unmarshal(request, &outbound); err != nil {
+			t.Fatal(err)
+		}
+		result, _ := json.Marshal(httpResponse{StatusCode: 200, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: []byte("data: {\"id\":\"c1\",\"model\":\"glm\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")})
+		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
+		return envelope, 0
+	})
+	t.Cleanup(runtime.Shutdown)
+	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
+	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm", Payload: []byte(`{"model":"ignored","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
+	result, callErr := (provider{}).Call("executor.execute", req)
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	response := result.(map[string]any)
+	var completion map[string]any
+	if err := json.Unmarshal(response["Payload"].([]byte), &completion); err != nil {
+		t.Fatal(err)
+	}
+	if completion["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)["content"] != "ok" {
+		t.Fatalf("completion = %#v", completion)
+	}
+	if outbound["url"] != baseURL+"/v2/chat/completions" {
+		t.Fatalf("url = %#v", outbound["url"])
+	}
+}
 
 func TestAggregateSSEPreservesReasoningToolsAndUsage(t *testing.T) {
 	raw := strings.Join([]string{
