@@ -162,7 +162,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	}
 	aggregated, err := aggregateSSE(upstream.Body)
 	if err != nil {
-		return nil, failure("invalid_upstream_response", err.Error(), http.StatusBadGateway, "request")
+		return nil, failure("invalid_upstream_response", err.Error(), http.StatusBadGateway, "")
 	}
 	return map[string]any{"Payload": aggregated, "Headers": upstream.Headers}, nil
 }
@@ -173,7 +173,7 @@ func forwardStream(pluginStreamID, hostStreamID string) {
 	defer func() { _ = closeHostStream(hostStreamID) }()
 	defer func() {
 		if recover() != nil {
-			streamFailure = failure("plugin_panic", "stream forwarding panic", 0, "request")
+			streamFailure = failure("plugin_panic", "stream forwarding panic", 0, "")
 		}
 		closePluginStream(pluginStreamID, streamFailure)
 	}()
@@ -184,7 +184,7 @@ func forwardStream(pluginStreamID, hostStreamID string) {
 			return
 		}
 		if chunk.Error != "" {
-			streamFailure = failure("upstream_stream_error", chunk.Error, http.StatusBadGateway, "request")
+			streamFailure = failure("upstream_stream_error", chunk.Error, http.StatusBadGateway, "")
 			return
 		}
 		if len(chunk.Payload) > 0 {
@@ -463,7 +463,7 @@ func hostFailure(err error) *nativeabi.Error {
 	if f, ok := err.(*nativeabi.Error); ok {
 		return f
 	}
-	return failure("host_callback_failed", err.Error(), 502, "request")
+	return failure("host_callback_failed", err.Error(), 502, "")
 }
 func scopeForStatus(status int) string {
 	if status == 401 || status == 403 {

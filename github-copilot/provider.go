@@ -438,7 +438,7 @@ func forward(pluginID, hostID string, normalizeReasoning bool) {
 	defer func() { _ = closeHost(hostID) }()
 	defer func() {
 		if recover() != nil {
-			streamFailure = fail("plugin_panic", "stream forwarding panic", 0, "request")
+			streamFailure = fail("plugin_panic", "stream forwarding panic", 0, "")
 		}
 		closePlugin(pluginID, streamFailure)
 	}()
@@ -449,7 +449,7 @@ func forward(pluginID, hostID string, normalizeReasoning bool) {
 			return
 		}
 		if c.Error != "" {
-			streamFailure = fail("upstream_stream_error", c.Error, 502, "request")
+			streamFailure = fail("upstream_stream_error", c.Error, 502, "")
 			return
 		}
 		payload := c.Payload
@@ -523,7 +523,7 @@ func hostFail(err error) *nativeabi.Error {
 	if f, ok := err.(*nativeabi.Error); ok {
 		return f
 	}
-	return fail("host_callback_failed", err.Error(), 502, "request")
+	return fail("host_callback_failed", err.Error(), 502, "")
 }
 func statusScope(s int) string {
 	if s == 401 || s == 403 {
