@@ -45,6 +45,8 @@ type Request struct {
 	Payload                     []byte
 	Token                       Token
 	CustomHeaders               map[string]string
+	AuthPath                    string
+	AuthMetadata                map[string]any
 }
 type Response struct {
 	Payload   []byte

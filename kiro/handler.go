@@ -56,6 +56,9 @@ func (h *pluginHandler) Call(method string, raw json.RawMessage) (any, *nativeab
 		if err != nil {
 			return nil, typedFailure(err, "request", "kiro_execute")
 		}
+		if err := persistRefreshedAuth(providerReq, resp.Refreshed); err != nil {
+			return nil, typedFailure(err, "credential", "refresh_persist_failed")
+		}
 		return map[string]any{"Payload": resp.Payload, "Headers": resp.Headers, "Metadata": refreshMetadata(resp.Refreshed)}, nil
 	case methodExecutorExecuteStream:
 		var req rpcExecutorRequest
@@ -126,7 +129,11 @@ func requestFromRPC(req rpcExecutorRequest) (Request, error) {
 	if value := req.AuthAttributes["custom_headers"]; value != "" {
 		_ = json.Unmarshal([]byte(value), &headers)
 	}
-	return Request{Model: req.Model, SourceFormat: req.SourceFormat, AuthID: req.AuthID, Payload: req.Payload, Token: token, CustomHeaders: headers}, nil
+	authPath := req.AuthAttributes["path"]
+	if authPath == "" {
+		authPath = req.AuthAttributes["source"]
+	}
+	return Request{Model: req.Model, SourceFormat: req.SourceFormat, AuthID: req.AuthID, Payload: req.Payload, Token: token, CustomHeaders: headers, AuthPath: authPath, AuthMetadata: req.AuthMetadata}, nil
 }
 func refreshMetadata(token *Token) map[string]any {
 	if token == nil {
@@ -143,12 +150,36 @@ func streamKiro(streamID string, req Request) {
 		}
 		_ = runtimeABI.HostCall(nativeabi.MethodHostStreamClose, closeReq, nil)
 	}()
-	_, err := NewProvider(hostTransport{}).ExecuteStream(context.Background(), req, func(payload []byte) error {
+	refreshed, err := NewProvider(hostTransport{}).ExecuteStream(context.Background(), req, func(payload []byte) error {
 		return runtimeABI.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: streamID, Payload: payload}, nil)
 	})
 	if err != nil {
 		closeReq.Failure = typedFailure(err, "request", "kiro_stream")
+	} else if err := persistRefreshedAuth(req, refreshed); err != nil {
+		closeReq.Failure = typedFailure(err, "credential", "refresh_persist_failed")
 	}
+}
+
+func persistRefreshedAuth(req Request, token *Token) error {
+	if token == nil || strings.TrimSpace(req.AuthPath) == "" {
+		return nil
+	}
+	name := filepath.Base(strings.TrimSpace(req.AuthPath))
+	if name == "." || name == string(filepath.Separator) || !strings.HasSuffix(strings.ToLower(name), ".json") {
+		return errors.New("selected Kiro auth has no safe JSON file name")
+	}
+	values := make(map[string]any, len(req.AuthMetadata)+16)
+	for key, value := range req.AuthMetadata {
+		values[key] = value
+	}
+	for key, value := range tokenMetadata(*token) {
+		values[key] = value
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	return runtimeABI.HostCall("host.auth.save", map[string]any{"name": name, "json": json.RawMessage(raw)}, nil)
 }
 
 type hostTransport struct{}
@@ -278,11 +309,16 @@ type loginState struct {
 	ClientSecret string    `json:"client_secret"`
 	DeviceCode   string    `json:"device_code"`
 	Region       string    `json:"region"`
+	AuthMethod   string    `json:"auth_method"`
+	StartURL     string    `json:"start_url,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 func startLoginRPC(raw []byte) (any, *nativeabi.Error) {
-	var req struct{ Metadata map[string]any }
+	var req struct {
+		BaseURL  string
+		Metadata map[string]any
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
 	}
@@ -290,17 +326,34 @@ func startLoginRPC(raw []byte) (any, *nativeabi.Error) {
 	if flow == "" {
 		flow = strings.ToLower(strings.TrimSpace(stringValue(req.Metadata, "auth_method")))
 	}
-	switch flow {
-	case "", "builder-id", "builder_id", "device", "device-code", "device_code":
-	default:
-		return nil, &nativeabi.Error{Code: "unsupported_login", Message: "Kiro native login supports only the Builder ID device flow", Scope: "credential"}
-	}
 	region := stringValue(req.Metadata, "region")
 	if region == "" {
 		region = "us-east-1"
 	}
+	startURL := stringValue(req.Metadata, "start_url")
+	if startURL == "" {
+		startURL = stringValue(req.Metadata, "startUrl")
+	}
+	switch flow {
+	case "google", "github", "builder-authcode", "builder_authcode":
+		return startOAuthLogin(strings.ReplaceAll(flow, "_", "-"), region, startURL)
+	case "idc-authcode", "idc_authcode":
+		if startURL == "" {
+			return nil, &nativeabi.Error{Code: "missing_start_url", Message: "IAM Identity Center start URL is required", Scope: "credential"}
+		}
+		return startOAuthLogin("idc-authcode", region, startURL)
+	case "idc", "idc-device", "idc_device":
+		if startURL == "" {
+			return nil, &nativeabi.Error{Code: "missing_start_url", Message: "IAM Identity Center start URL is required", Scope: "credential"}
+		}
+	case "", "builder-id", "builder_id", "device", "device-code", "device_code":
+		startURL = "https://view.awsapps.com/start"
+		flow = "builder-id"
+	default:
+		return nil, &nativeabi.Error{Code: "unsupported_login", Message: "unsupported Kiro login flow", Scope: "credential"}
+	}
 	endpoint := "https://oidc." + region + ".amazonaws.com"
-	registerBody, _ := json.Marshal(map[string]any{"clientName": "Kiro IDE", "clientType": "public", "scopes": []string{"codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations", "codewhisperer:transformations", "codewhisperer:taskassist"}, "grantTypes": []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}})
+	registerBody, _ := json.Marshal(map[string]any{"clientName": "Kiro IDE", "clientType": "public", "scopes": kiroScopes(), "grantTypes": []string{"urn:ietf:params:oauth:grant-type:device_code", "refresh_token"}})
 	register, err := oidcCall(endpoint+"/client/register", registerBody)
 	if err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
@@ -312,7 +365,7 @@ func startLoginRPC(raw []byte) (any, *nativeabi.Error) {
 	if err := json.Unmarshal(register, &client); err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
 	}
-	deviceBody, _ := json.Marshal(map[string]string{"clientId": client.ClientID, "clientSecret": client.ClientSecret, "startUrl": "https://view.awsapps.com/start"})
+	deviceBody, _ := json.Marshal(map[string]string{"clientId": client.ClientID, "clientSecret": client.ClientSecret, "startUrl": startURL})
 	deviceRaw, err := oidcCall(endpoint+"/device_authorization", deviceBody)
 	if err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
@@ -328,7 +381,11 @@ func startLoginRPC(raw []byte) (any, *nativeabi.Error) {
 		return nil, typedFailure(err, "credential", "login_failed")
 	}
 	expires := time.Now().Add(time.Duration(device.ExpiresIn) * time.Second)
-	stateRaw, _ := json.Marshal(loginState{ClientID: client.ClientID, ClientSecret: client.ClientSecret, DeviceCode: device.DeviceCode, Region: region, ExpiresAt: expires})
+	authMethod := "builder-id"
+	if strings.HasPrefix(flow, "idc") {
+		authMethod = "idc"
+	}
+	stateRaw, _ := json.Marshal(loginState{ClientID: client.ClientID, ClientSecret: client.ClientSecret, DeviceCode: device.DeviceCode, Region: region, AuthMethod: authMethod, StartURL: startURL, ExpiresAt: expires})
 	url := device.VerificationURIComplete
 	if url == "" {
 		url = device.VerificationURI
@@ -339,6 +396,9 @@ func pollLoginRPC(raw []byte) (any, *nativeabi.Error) {
 	var req struct{ State string }
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
+	}
+	if hasOAuthSession(req.State) {
+		return pollOAuthLogin(req.State)
 	}
 	stateRaw, err := base64.RawURLEncoding.DecodeString(req.State)
 	if err != nil {
@@ -370,9 +430,8 @@ func pollLoginRPC(raw []byte) (any, *nativeabi.Error) {
 	if err := json.Unmarshal(response.Body, &tokenResult); err != nil {
 		return nil, typedFailure(err, "credential", "login_failed")
 	}
-	token := Token{Type: "kiro", AccessToken: tokenResult.AccessToken, RefreshToken: tokenResult.RefreshToken, ExpiresAt: time.Now().Add(time.Duration(tokenResult.ExpiresIn) * time.Second).UTC().Format(time.RFC3339), AuthMethod: "builder-id", Provider: "AWS", ClientID: state.ClientID, ClientSecret: state.ClientSecret, Region: state.Region}
-	storage, _ := json.Marshal(token)
-	return map[string]any{"Status": "success", "Message": "authorization complete", "Auth": map[string]any{"Provider": providerID, "ID": "kiro-" + accountKey(state.ClientID), "FileName": "kiro-" + accountKey(state.ClientID) + ".json", "StorageJSON": storage, "Metadata": tokenMetadata(token), "Attributes": map[string]string{"access_token": token.AccessToken}, "NextRefreshAfter": nextRefresh(token)}}, nil
+	token := Token{Type: "kiro", AccessToken: tokenResult.AccessToken, RefreshToken: tokenResult.RefreshToken, ExpiresAt: time.Now().Add(time.Duration(tokenResult.ExpiresIn) * time.Second).UTC().Format(time.RFC3339), AuthMethod: state.AuthMethod, Provider: "AWS", ClientID: state.ClientID, ClientSecret: state.ClientSecret, Region: state.Region, StartURL: state.StartURL}
+	return successfulLogin(token), nil
 }
 func oidcCall(url string, body []byte) ([]byte, error) {
 	response, err := hostTransport{}.Do(context.Background(), HTTPRequest{Method: "POST", URL: url, Headers: oidcHeaders(), Body: body})

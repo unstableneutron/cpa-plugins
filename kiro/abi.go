@@ -82,7 +82,10 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 }
 
 //export cliproxyPluginShutdown
-func cliproxyPluginShutdown() { runtimeABI.Shutdown() }
+func cliproxyPluginShutdown() {
+	closeOAuthSessions()
+	runtimeABI.Shutdown()
+}
 
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {

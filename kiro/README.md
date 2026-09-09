@@ -3,13 +3,19 @@
 Independent Kiro/Amazon Q executor and auth provider for CPA. It emits the
 native `conversationState` request protocol, consumes binary AWS EventStream,
 preserves Kiro IDE account fingerprints, and supports imported token files,
-Builder ID device login, Builder ID/IDC OIDC refresh, and social-token refresh.
+Google/GitHub social OAuth, Builder ID device and authorization-code login,
+IAM Identity Center device and authorization-code login, and every matching
+refresh flow.
 
 The host auth-directory watcher feeds changed files to `auth.parse`; the plugin
-does not watch files itself. Native login start supports only the Builder ID
-device flow. Google/GitHub social login start and IAM Identity Center login
-start remain unsupported; already imported tokens for those variants can be
-parsed and refreshed.
+does not watch files itself. Social and authorization-code flows use a
+plugin-owned loopback callback listener and return the browser URL to the host.
+The login variant is selected with `Metadata.login_method`; IDC flows also use
+`Metadata.start_url` and optionally `Metadata.region`.
+
+Inline token refresh persists through `host.auth.save` when the host supplies
+the selected physical credential path in executor auth attributes. The plugin
+uses only its validated `.json` basename and preserves unrelated auth metadata.
 
 ## Provenance
 
