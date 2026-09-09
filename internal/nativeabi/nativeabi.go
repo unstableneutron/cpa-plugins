@@ -15,6 +15,8 @@ var Version = "dev"
 const (
 	ABIVersion    uint32 = 1
 	SchemaVersion uint32 = 7
+	// SchemaVersionIngressProxy is required only by plugins using ingress plans.
+	SchemaVersionIngressProxy uint32 = 8
 )
 
 const (

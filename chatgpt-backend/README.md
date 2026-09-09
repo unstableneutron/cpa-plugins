@@ -4,6 +4,10 @@ Native authenticated passthrough for ChatGPT's `/backend-api/` HTTP surface.
 The host authenticates every request, streams request and response bodies, and
 keeps stored credential secrets opaque to the plugin.
 
+Requires host plugin schema 8. Older hosts reject the library rather than
+silently ignoring its ingress capability. Configure a frontend API key before
+enabling this plugin.
+
 The credential selector uses the host's shared active credential pool. It does
 not restrict credentials by frontend principal. The oldest active Codex
 credential whose first non-empty configured account identity matches

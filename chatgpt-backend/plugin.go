@@ -137,7 +137,7 @@ func (h *handler) Call(method string, request json.RawMessage) (any, *nativeabi.
 			return nil, &nativeabi.Error{Code: "invalid_config", Message: err.Error()}
 		}
 		return registration{
-			SchemaVersion: nativeabi.SchemaVersion,
+			SchemaVersion: nativeabi.SchemaVersionIngressProxy,
 			Metadata: metadata{
 				Name:             "ChatGPT backend passthrough",
 				Version:          nativeabi.Version,

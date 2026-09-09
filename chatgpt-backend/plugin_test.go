@@ -67,6 +67,9 @@ func TestRegistrationUsesConfiguredOriginAndBasePath(t *testing.T) {
 	if !result.(registration).Capabilities.IngressProxy {
 		t.Fatal("ingress_proxy = false, want true")
 	}
+	if result.(registration).SchemaVersion != 8 {
+		t.Fatal("ingress registration must require schema 8")
+	}
 	registered, callErr := h.Call(methodIngressRegister, nil)
 	if callErr != nil {
 		t.Fatalf("ingress register error = %v", callErr)
