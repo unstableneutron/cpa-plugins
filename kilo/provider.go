@@ -58,7 +58,7 @@ type authData struct {
 func (provider) Call(method string, raw json.RawMessage) (any, *nativeabi.Error) {
 	switch method {
 	case "plugin.register", "plugin.reconfigure":
-		return registration{nativeabi.SchemaVersion, map[string]any{"Name": "Kilo", "Version": "0.1.0", "Author": "unstableneutron", "GitHubRepository": "https://github.com/unstableneutron/cpa-plugins", "ConfigFields": []any{}}, map[string]any{"model_provider": true, "auth_provider": true, "executor": true, "executor_model_scope": "oauth", "executor_input_formats": []string{"chat-completions"}, "executor_output_formats": []string{"chat-completions"}}}, nil
+		return registration{nativeabi.SchemaVersion, map[string]any{"Name": "Kilo", "Version": nativeabi.Version, "Author": "unstableneutron", "GitHubRepository": "https://github.com/unstableneutron/cpa-plugins", "ConfigFields": []any{}}, map[string]any{"model_provider": true, "auth_provider": true, "executor": true, "executor_model_scope": "oauth", "executor_input_formats": []string{"chat-completions"}, "executor_output_formats": []string{"chat-completions"}}}, nil
 	case "plugin.quiesce", "plugin.shutdown":
 		return struct{}{}, nil
 	case "executor.identifier", "auth.identifier":

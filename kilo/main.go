@@ -27,7 +27,6 @@ static void free_host_buffer(void* ptr, size_t len) {
 import "C"
 
 import (
-	"fmt"
 	"unsafe"
 
 	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
@@ -43,7 +42,9 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 		return 1
 	}
 	C.store_host_api(host)
-	runtime.Initialize(provider{}, hostCall)
+	if err := runtime.Initialize(provider{}, hostCall); err != nil {
+		return 1
+	}
 	plugin.abi_version = C.uint32_t(nativeabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -79,7 +80,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) {
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() { runtime.Shutdown() }
 
-func hostCall(method string, request []byte) ([]byte, error) {
+func hostCall(method string, request []byte) ([]byte, int) {
 	cMethod := C.CString(method)
 	defer C.free(unsafe.Pointer(cMethod))
 	var cRequest *C.uint8_t
@@ -88,14 +89,12 @@ func hostCall(method string, request []byte) ([]byte, error) {
 		defer C.free(unsafe.Pointer(cRequest))
 	}
 	var response C.cliproxy_buffer
-	if status := C.call_host_api(cMethod, cRequest, C.size_t(len(request)), &response); status != 0 {
-		return nil, fmt.Errorf("host callback %s failed with status %d", method, int(status))
-	}
+	status := C.call_host_api(cMethod, cRequest, C.size_t(len(request)), &response)
 	if response.ptr == nil || response.len == 0 {
-		return nil, fmt.Errorf("host callback %s returned an empty response", method)
+		return nil, int(status)
 	}
 	defer C.free_host_buffer(response.ptr, response.len)
-	return C.GoBytes(response.ptr, C.int(response.len)), nil
+	return C.GoBytes(response.ptr, C.int(response.len)), int(status)
 }
 
 func writeResponse(response *C.cliproxy_buffer, raw []byte) {

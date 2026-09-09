@@ -85,7 +85,7 @@ type hostStreamRead struct {
 func (provider) Call(method string, raw json.RawMessage) (any, *nativeabi.Error) {
 	switch method {
 	case "plugin.register", "plugin.reconfigure":
-		return registration{nativeabi.SchemaVersion, metadata{"CodeBuddy", "0.1.0", "unstableneutron", "https://github.com/unstableneutron/cpa-plugins", []any{}}, capabilities{true, true, true, "oauth", []string{"chat-completions"}, []string{"chat-completions"}}}, nil
+		return registration{nativeabi.SchemaVersion, metadata{"CodeBuddy", nativeabi.Version, "unstableneutron", "https://github.com/unstableneutron/cpa-plugins", []any{}}, capabilities{true, true, true, "oauth", []string{"chat-completions"}, []string{"chat-completions"}}}, nil
 	case "plugin.quiesce", "plugin.shutdown":
 		return struct{}{}, nil
 	case "executor.identifier", "auth.identifier":
