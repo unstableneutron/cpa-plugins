@@ -781,10 +781,32 @@ func commandCodeLineToOpenAIChunks(line []byte, state *commandCodeStreamState) (
 		}
 		return nil, state.Usage.detail(), commandCodeAbortError{statusErr{code: http.StatusBadGateway, msg: message}}
 	case "error":
-		return nil, usage.Detail{}, commandCodeProviderError{statusErr{code: commandCodeErrorStatus(root), msg: commandCodeErrorMessage(root)}}
+		return nil, usage.Detail{}, commandCodeProviderError{
+			statusErr: statusErr{code: commandCodeErrorStatus(root), msg: commandCodeErrorMessage(root)},
+			errorCode: commandCodeEventErrorCode(root),
+		}
 	default:
 		return nil, usage.Detail{}, nil
 	}
+}
+
+func commandCodeEventErrorCode(root gjson.Result) string {
+	if value := root.Get("error.code"); value.Type == gjson.String {
+		return strings.TrimSpace(value.String())
+	}
+	for _, path := range []string{"message", "error", "error.message"} {
+		value := root.Get(path)
+		if value.Type != gjson.String {
+			continue
+		}
+		start := strings.IndexByte(value.String(), '{')
+		if start >= 0 {
+			if code := commandCodeStructuredErrorCode(value.String()[start:]); code != "" {
+				return code
+			}
+		}
+	}
+	return ""
 }
 
 func commandCodeErrorStatus(root gjson.Result) int {

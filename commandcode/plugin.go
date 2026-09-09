@@ -696,6 +696,9 @@ func failure(err error) *nativeabi.Error {
 			scope = "model"
 		}
 	}
+	if coded, ok := err.(interface{ ErrorCode() string }); ok {
+		code, scope, retryable = classifyCommandCodeFailure(status, coded.ErrorCode(), code, scope, retryable)
+	}
 	return &nativeabi.Error{Code: code, Message: err.Error(), HTTPStatus: status, Scope: scope, Retryable: retryable}
 }
 
@@ -706,10 +709,33 @@ func upstreamFailure(status int, message string, headers http.Header) *nativeabi
 	} else if status == http.StatusNotFound {
 		scope = "model"
 	}
-	failure := &nativeabi.Error{Code: "upstream_http", Message: message, HTTPStatus: status, Scope: scope, Retryable: status == http.StatusTooManyRequests || status >= 500}
+	code, scope, retryable := classifyCommandCodeFailure(status, commandCodeStructuredErrorCode(message), "upstream_http", scope, status == http.StatusTooManyRequests || status >= 500)
+	failure := &nativeabi.Error{Code: code, Message: message, HTTPStatus: status, Scope: scope, Retryable: retryable}
 	if seconds, err := time.ParseDuration(strings.TrimSpace(headers.Get("Retry-After")) + "s"); err == nil && seconds >= 0 {
 		milliseconds := seconds.Milliseconds()
 		failure.RetryAfterMS = &milliseconds
 	}
 	return failure
+}
+
+func classifyCommandCodeFailure(status int, providerCode, fallbackCode, fallbackScope string, fallbackRetryable bool) (string, string, bool) {
+	switch {
+	case status == http.StatusBadRequest && providerCode == "unsupported_model":
+		return "unsupported_model", "model", false
+	case status == http.StatusForbidden && providerCode == "upgrade_required":
+		return "upgrade_required", "credential", false
+	default:
+		return fallbackCode, fallbackScope, fallbackRetryable
+	}
+}
+
+func commandCodeStructuredErrorCode(body string) string {
+	if !gjson.Valid(body) {
+		return ""
+	}
+	root := gjson.Parse(strings.TrimSpace(body))
+	if value := root.Get("error.code"); value.Type == gjson.String {
+		return strings.TrimSpace(value.String())
+	}
+	return ""
 }

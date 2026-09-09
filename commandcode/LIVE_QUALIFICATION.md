@@ -113,53 +113,47 @@ No dashboard session was authenticated, no private endpoint was guessed or probe
 and no internal browser API is claimed stable. This is a bounded documentation
 and response survey, not proof that an undocumented API does not exist.
 
-## Host mapping and conditional minimal schema
+## Implemented routing policy
 
 Keep current token usage in executor responses and stream terminal usage. Existing
 native `Error.RetryAfterMS` already carries an observed retry delay to scheduler
-cooldown; no ABI change is needed for that. Host `Auth.Quota` / model quota contain
-`Exceeded`, `NextRecoverAt`, `ObservedAt`, and bounded `Signals`; passive header
-collection currently only understands Claude/Codex. Plugin `UsageRecord` has
-`AuthID`, `AuthIndex`, token detail and response headers, but no typed cost or
-credit-balance field. Do not infer a balance by subtracting local token counts,
-or reuse account metadata as an untyped quota transport.
+cooldown; no ABI change is needed for that. The plugin now recognizes only exact,
+structured provider `error.code` values in the corresponding statuses:
+
+- HTTP 400 `unsupported_model` becomes non-retryable code `unsupported_model`
+  with model scope. The updated host cools only that account/model pair for 12 hours.
+- HTTP 403 `upgrade_required` becomes non-retryable code `upgrade_required`
+  with credential scope. The host retains its 30-minute cooldown for the attempted
+  account/model, not all models. Another credential may serve the failed request.
+- Other 400 and 422 failures retain the existing request scope and generic code.
+  Error prose, `error.type: invalid_request_error`, and code/status mismatches do
+  not trigger either classification.
+
+The same classification applies to HTTP failures and provider error events used
+by nonstream and stream execution. Status and body/message are preserved. Local
+cancellation and abort behavior is unchanged.
+
+The deterministic native smoke configures two accounts and counts attempts. In
+both cases, A/X is attempted once while B/X serves both requests; B/Y is denied
+once and A/Y serves both requests, proving that other models remain eligible.
+Both auth JSON and environment-reference account modes are covered; dummy
+canonical and legacy global environment keys
+verify that account attributes retain precedence.
+
+Eight smoke runs cover both loader modes, both account formats and both denial
+codes. Each includes a stream-bootstrap failure and a denial after delivered
+content: the latter must close with an error without replay, and the next request
+must use the other account. Host tests cover exact expiry boundaries, successful
+recovery and disabled cooling without wall-clock sleeps. Full host normal/race/
+purego suites and plugin test/check/race pass. These tests use fake upstreams;
+no additional live calls were required for the denial-handling change.
+
+This requires both the updated plugin classifier and updated host error-code
+bridge; no ABI version change is needed. Operator-disabled cooling remains
+respected. Discovery is not entitlement evidence and never seeds these denials;
+in particular, a Provider API rejection must not disable the native CLI path.
 
 Recommended UX now: show request tokens, observed errors/cooldowns, quota/plan as
 **unknown**, and a user-initiated dashboard link. Static catalog availability is
 not account entitlement. Do not enable Command Code quota scheduling from this
 evidence or duplicate Claude/Codex header parsing for it.
-
-Only if a documented or explicitly supported metadata source becomes available,
-consider one optional account-bound host callback carrying:
-
-```text
-QuotaSnapshot {
-  observed_at: timestamp
-  limits: [{
-    scope: account | model
-    model?: string
-    unit: requests | tokens | credits
-    limit?: decimal-string
-    remaining?: decimal-string
-    window_seconds?: integer
-    reset_at?: timestamp
-  }]
-}
-```
-
-All optional numbers are absent when unknown, never guessed as zero. The host
-binds the account from the authorized callback context (not a caller-supplied
-account/key), validates finite nonnegative values and model IDs, and bounds list
-size. No arbitrary headers, URLs, plan descriptions, email or upstream account
-identifiers. Start with a host-owned 60-second freshness TTL, cap any future
-provider TTL at 5 minutes, and coalesce reads per credential; no automatic
-polling or quota requests until the source permits them. Key rotation invalidates
-the snapshot. Replace atomically, do not merge stale watermarks; errors leave a
-dated stale display, while stale/missing observations never deny scheduling.
-Actual 429 retry-after remains separate authoritative cooldown behavior.
-
-Before implementing, test account isolation and spoof rejection, key rotation,
-unknown versus zero, malformed/negative/oversized input, redaction, replacement
-versus merge, and TTL boundaries with a controllable clock. Capability negotiation
-must make it optional for older plugins. No speculative schema or endpoint has
-been implemented in this follow-up.

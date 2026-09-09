@@ -327,6 +327,102 @@ func TestUpstreamFailureScopesAndRetryHint(t *testing.T) {
 	}
 }
 
+func TestUpstreamFailureRecognizesOnlyExactStructuredProviderCodes(t *testing.T) {
+	tests := []struct {
+		name, body, wantCode, wantScope string
+		status                          int
+	}{
+		{"unsupported model", `{"error":{"code":"unsupported_model","type":"invalid_request_error","message":"no access"}}`, "unsupported_model", "model", 400},
+		{"upgrade required", `{"error":{"code":"upgrade_required","type":"permission_error","message":"upgrade"}}`, "upgrade_required", "credential", 403},
+		{"unsupported wrong status", `{"error":{"code":"unsupported_model"}}`, "upstream_http", "request", 422},
+		{"generic bad request", `{"error":{"code":"invalid_request_error"}}`, "upstream_http", "request", 400},
+		{"prose is not a code", `unsupported_model: try another model`, "upstream_http", "request", 400},
+		{"truncated JSON is not a code", `{"error":{"code":"unsupported_model"}`, "upstream_http", "request", 400},
+		{"type is not a code", `{"error":{"type":"invalid_request_error","message":"unsupported_model"}}`, "upstream_http", "request", 400},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := upstreamFailure(test.status, test.body, nil)
+			if got.Code != test.wantCode || got.Scope != test.wantScope || got.Retryable {
+				t.Fatalf("failure = %+v", got)
+			}
+			if got.HTTPStatus != test.status || got.Message != test.body {
+				t.Fatalf("status/body not preserved: %+v", got)
+			}
+		})
+	}
+}
+
+func TestOpenPreservesStructuredHTTPFailure(t *testing.T) {
+	body := `{"error":{"code":"unsupported_model","message":"not offered"}}`
+	reads := 0
+	var runtime nativeabi.Runtime
+	if err := runtime.Initialize(nil, func(method string, _ []byte) ([]byte, int) {
+		result := any(struct{}{})
+		switch method {
+		case nativeabi.MethodHostHTTPDoStream:
+			result = streamHTTPResponse{StatusCode: 400, StreamID: "failure"}
+		case nativeabi.MethodHostHTTPStreamRead:
+			reads++
+			result = streamReadResponse{Payload: []byte(body), Done: true}
+		}
+		response, _ := json.Marshal(nativeabi.Envelope{OK: true, Result: mustJSON(result)})
+		return response, 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, got := (&plugin{runtime: &runtime}).open(executorRequest{}, preparedRequest{})
+	if got == nil || got.Code != "unsupported_model" || got.Scope != "model" || got.Retryable || got.HTTPStatus != 400 || got.Message != body || reads != 1 {
+		t.Fatalf("failure=%+v reads=%d", got, reads)
+	}
+}
+
+func TestExecuteAndStreamPreserveProviderEventFailure(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "nonstream", true: "stream"}[stream], func(t *testing.T) {
+			closed := make(chan nativeabi.StreamCloseRequest, 1)
+			var runtime nativeabi.Runtime
+			if err := runtime.Initialize(nil, func(method string, request []byte) ([]byte, int) {
+				result := any(struct{}{})
+				switch method {
+				case nativeabi.MethodHostHTTPDoStream:
+					result = streamHTTPResponse{StatusCode: 200, StreamID: "upstream"}
+				case nativeabi.MethodHostHTTPStreamRead:
+					result = streamReadResponse{Payload: []byte("data: {\"type\":\"error\",\"statusCode\":403,\"error\":{\"code\":\"upgrade_required\",\"message\":\"upgrade\"}}\n"), Done: true}
+				case nativeabi.MethodHostStreamClose:
+					var closeRequest nativeabi.StreamCloseRequest
+					_ = json.Unmarshal(request, &closeRequest)
+					closed <- closeRequest
+				}
+				response, _ := json.Marshal(nativeabi.Envelope{OK: true, Result: mustJSON(result)})
+				return response, 0
+			}); err != nil {
+				t.Fatal(err)
+			}
+			p := &plugin{runtime: &runtime}
+			request := executorRequest{Model: "gpt-5.5", Payload: []byte(`{"messages":[]}`), AuthAttributes: map[string]string{"api_key": "fixture", "base_url": "https://example.test"}, StreamID: "downstream"}
+			if !stream {
+				_, got := p.execute(request)
+				if got == nil || got.Code != "upgrade_required" || got.Scope != "credential" || got.Retryable {
+					t.Fatalf("failure = %+v", got)
+				}
+				return
+			}
+			if _, got := p.executeStream(request); got != nil {
+				t.Fatal(got)
+			}
+			select {
+			case result := <-closed:
+				if result.Failure == nil || result.Failure.Code != "upgrade_required" || result.Failure.Scope != "credential" || result.Failure.Retryable {
+					t.Fatalf("close = %+v", result)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("stream did not close")
+			}
+		})
+	}
+}
+
 func TestCredentialAliasesAndCanonicalEnvironmentPrecedence(t *testing.T) {
 	t.Setenv("COMMAND_CODE_API_KEY", "canonical")
 	t.Setenv("COMMANDCODE_API_KEY", "legacy")

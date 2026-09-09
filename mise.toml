@@ -49,11 +49,15 @@ trap 'rm -rf "$libs"' EXIT
 for id in commandcode chatgpt-backend; do
   unzip -jo "dist/${id}_${VERSION:-0.1.0}_linux_amd64.zip" '*.so' -d "$libs"
 done
-python3 tests/native_e2e.py --host "$HOST_CGO" --plugins "$libs"
-python3 tests/native_e2e.py --host "$HOST_PUREGO" --plugins "$libs"
+for failure in unsupported_model upgrade_required; do
+  python3 tests/native_e2e.py --qualification-failure "$failure" --host "$HOST_CGO" --plugins "$libs"
+  python3 tests/native_e2e.py --qualification-failure "$failure" --host "$HOST_PUREGO" --plugins "$libs"
+done
 if test "${ENVIRONMENT_AUTH_SMOKE:-0}" = 1; then
-  python3 tests/native_e2e.py --environment-auth --host "$HOST_CGO" --plugins "$libs"
-  python3 tests/native_e2e.py --environment-auth --host "$HOST_PUREGO" --plugins "$libs"
+  for failure in unsupported_model upgrade_required; do
+    python3 tests/native_e2e.py --environment-auth --qualification-failure "$failure" --host "$HOST_CGO" --plugins "$libs"
+    python3 tests/native_e2e.py --environment-auth --qualification-failure "$failure" --host "$HOST_PUREGO" --plugins "$libs"
+  done
 fi
 '''
 

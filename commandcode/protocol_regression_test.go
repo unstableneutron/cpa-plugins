@@ -62,6 +62,28 @@ func TestProtocolStructuredErrorsPreserveStatus(t *testing.T) {
 	}
 }
 
+func TestProtocolStructuredErrorsPreserveRecognizedCode(t *testing.T) {
+	tests := []struct {
+		name, line, wantCode, wantScope string
+	}{
+		{"unsupported", `{"type":"error","statusCode":400,"error":{"code":"unsupported_model","type":"invalid_request_error","message":"not offered"}}`, "unsupported_model", "model"},
+		{"upgrade", `{"type":"error","statusCode":403,"error":{"code":"upgrade_required","type":"permission_error","message":"upgrade"}}`, "upgrade_required", "credential"},
+		{"embedded", `{"type":"error","message":"400 {\"error\":{\"code\":\"unsupported_model\",\"message\":\"not offered\"}}"}`, "unsupported_model", "model"},
+		{"generic", `{"type":"error","statusCode":400,"error":{"code":"invalid_request_error","message":"bad"}}`, "commandcode_error", "request"},
+		{"prose", `{"type":"error","statusCode":400,"message":"unsupported_model"}`, "commandcode_error", "request"},
+		{"wrong status", `{"type":"error","statusCode":422,"error":{"code":"unsupported_model","message":"bad"}}`, "commandcode_error", "request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := commandCodeLineToOpenAIChunks([]byte(test.line), newCommandCodeStreamState("gpt-5.5"))
+			got := failure(err)
+			if got.Code != test.wantCode || got.Scope != test.wantScope || got.Retryable {
+				t.Fatalf("failure = %+v", got)
+			}
+		})
+	}
+}
+
 func TestProtocolDoneCannotHideTruncatedStream(t *testing.T) {
 	reader := strings.NewReader(`{"type":"text-delta","text":"partial"}` + "\n[DONE]\n")
 	if _, _, err := collectCommandCodeResponse(context.Background(), reader, "gpt-5.5"); err == nil {
