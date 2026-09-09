@@ -27,6 +27,7 @@ func (e statusErr) Error() string   { return e.msg }
 func (e statusErr) StatusCode() int { return e.code }
 
 type commandCodeAbortError struct{ statusErr }
+type commandCodeProviderError struct{ statusErr }
 
 type commandCodePayloadOptions struct {
 	Model, WorkingDir, Environment, ThreadID string

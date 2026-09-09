@@ -781,7 +781,7 @@ func commandCodeLineToOpenAIChunks(line []byte, state *commandCodeStreamState) (
 		}
 		return nil, state.Usage.detail(), commandCodeAbortError{statusErr{code: http.StatusBadGateway, msg: message}}
 	case "error":
-		return nil, usage.Detail{}, statusErr{code: commandCodeErrorStatus(root), msg: commandCodeErrorMessage(root)}
+		return nil, usage.Detail{}, commandCodeProviderError{statusErr{code: commandCodeErrorStatus(root), msg: commandCodeErrorMessage(root)}}
 	default:
 		return nil, usage.Detail{}, nil
 	}

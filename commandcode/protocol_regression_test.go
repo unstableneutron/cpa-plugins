@@ -56,6 +56,9 @@ func TestProtocolStructuredErrorsPreserveStatus(t *testing.T) {
 		if !ok || status.StatusCode() != testCase.want {
 			t.Fatalf("line=%s error=%v want=%d", testCase.line, err, testCase.want)
 		}
+		if typed := failure(err); testCase.want == 429 && typed.Scope != "credential" {
+			t.Fatalf("line=%s failure=%+v", testCase.line, typed)
+		}
 	}
 }
 

@@ -567,6 +567,13 @@ func failure(err error) *nativeabi.Error {
 	retryable := status == 429 || status >= 500
 	if _, ok := err.(commandCodeAbortError); ok {
 		code, scope, retryable = "aborted", "request", false
+	} else if _, ok := err.(commandCodeProviderError); ok {
+		scope = "credential"
+		if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+			scope = "request"
+		} else if status == http.StatusNotFound {
+			scope = "model"
+		}
 	}
 	return &nativeabi.Error{Code: code, Message: err.Error(), HTTPStatus: status, Scope: scope, Retryable: retryable}
 }
