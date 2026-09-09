@@ -121,7 +121,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 		return nil, f
 	}
 	format := first(req.SourceFormat, req.Format, "chat-completions")
-	model, suffix := modelSuffix(strip(req.Model))
+	model, _ := modelSuffix(strip(req.Model))
 	path := "/chat/completions"
 	if format == "responses" || format == "openai-response" || strings.Contains(strings.ToLower(model), "codex") {
 		path = "/responses"
@@ -135,7 +135,6 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	body["model"] = model
 	body["stream"] = stream
 	normalizeCopilotRequest(body, path)
-	applyThinkingSuffix(body, suffix, path)
 	if stream && path == "/chat/completions" {
 		body["stream_options"] = map[string]any{"include_usage": true}
 	}

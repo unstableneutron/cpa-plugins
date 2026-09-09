@@ -25,7 +25,7 @@ func TestExecuteUsesKiloOpenRouterProtocol(t *testing.T) {
 	}
 	t.Cleanup(runtime.Shutdown)
 	stored, _ := json.Marshal(storage{Token: "token", OrganizationID: "org"})
-	req, _ := json.Marshal(executorRequest{Model: "kilo/openai/gpt-5(9000)", Payload: []byte(`{"messages":[]}`), StorageJSON: stored, Headers: http.Header{"X-Trace": {"from-client"}}, AuthAttributes: map[string]string{"header:X-Static": "set", "header:X-Copied": "$X-Trace"}})
+	req, _ := json.Marshal(executorRequest{Model: "kilo/openai/gpt-5(9000)", Payload: []byte(`{"reasoning_effort":"low","messages":[]}`), StorageJSON: stored, Headers: http.Header{"X-Trace": {"from-client"}}, AuthAttributes: map[string]string{"header:X-Static": "set", "header:X-Copied": "$X-Trace"}})
 	result, callErr := (provider{}).Call("executor.execute", req)
 	if callErr != nil {
 		t.Fatal(callErr)
@@ -46,7 +46,7 @@ func TestExecuteUsesKiloOpenRouterProtocol(t *testing.T) {
 	bodyRaw, _ := base64.StdEncoding.DecodeString(outbound["body"].(string))
 	var body map[string]any
 	_ = json.Unmarshal(bodyRaw, &body)
-	if body["model"] != "openai/gpt-5" || body["reasoning_effort"] != "high" {
+	if body["model"] != "openai/gpt-5" || body["reasoning_effort"] != "low" {
 		t.Fatalf("outbound body = %#v", body)
 	}
 }

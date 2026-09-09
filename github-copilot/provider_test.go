@@ -69,10 +69,10 @@ func TestNormalizeResponsesPreservesImagesToolsAndThinking(t *testing.T) {
 			map[string]any{"role": "tool", "tool_call_id": "call-1", "content": "done"},
 		},
 		"tools":        []any{map[string]any{"type": "function", "function": map[string]any{"name": "inspect", "description": "Inspect", "parameters": map[string]any{"type": "object"}}}, map[string]any{"type": "unsupported"}},
+		"reasoning":    map[string]any{"effort": "low"},
 		"service_tier": "priority",
 	}
 	normalizeCopilotRequest(body, "/responses")
-	applyThinkingSuffix(body, "high", "/responses")
 	input := body["input"].([]any)
 	firstContent := input[0].(map[string]any)["content"].([]any)
 	if len(firstContent) != 2 || firstContent[1].(map[string]any)["type"] != "input_image" {
@@ -81,7 +81,7 @@ func TestNormalizeResponsesPreservesImagesToolsAndThinking(t *testing.T) {
 	if len(body["tools"].([]any)) != 1 || body["service_tier"] != nil || body["store"] != false {
 		t.Fatalf("body = %#v", body)
 	}
-	if body["reasoning"].(map[string]any)["effort"] != "high" {
+	if body["reasoning"].(map[string]any)["effort"] != "low" || body["reasoning"].(map[string]any)["summary"] != "auto" {
 		t.Fatalf("reasoning = %#v", body["reasoning"])
 	}
 }

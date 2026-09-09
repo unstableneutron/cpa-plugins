@@ -103,9 +103,8 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	if err = json.Unmarshal(req.Payload, &body); err != nil {
 		return nil, fail("invalid_request", err.Error(), 400, "request")
 	}
-	model, suffix := modelSuffix(stripProvider(req.Model))
+	model, _ := modelSuffix(stripProvider(req.Model))
 	body["model"] = model
-	applyOpenAIThinking(body, suffix)
 	body["stream"] = stream
 	payload, _ := json.Marshal(body)
 	headers := headersFor(s, stream)
@@ -385,29 +384,6 @@ func modelSuffix(model string) (string, string) {
 		return model, ""
 	}
 	return model[:open], model[open+1 : len(model)-1]
-}
-func applyOpenAIThinking(body map[string]any, suffix string) {
-	effort := strings.ToLower(strings.TrimSpace(suffix))
-	if budget, err := strconv.Atoi(effort); err == nil && budget >= 0 {
-		switch {
-		case budget == 0:
-			effort = "none"
-		case budget <= 512:
-			effort = "minimal"
-		case budget <= 1024:
-			effort = "low"
-		case budget <= 8192:
-			effort = "medium"
-		case budget <= 24576:
-			effort = "high"
-		default:
-			effort = "xhigh"
-		}
-	}
-	switch effort {
-	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
-		body["reasoning_effort"] = effort
-	}
 }
 func applyCustomHeaders(headers http.Header, attributes map[string]string, clientHeaders http.Header) {
 	for key, value := range attributes {

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
 	"strings"
 )
 
@@ -26,6 +25,9 @@ func normalizeCopilotRequest(body map[string]any, path string) {
 		}
 		if _, ok := body["include"]; !ok {
 			body["include"] = []any{"reasoning.encrypted_content"}
+		}
+		if reasoning, _ := body["reasoning"].(map[string]any); reasoning != nil && reasoning["effort"] != nil && reasoning["summary"] == nil {
+			reasoning["summary"] = "auto"
 		}
 		return
 	}
@@ -232,75 +234,6 @@ func normalizeResponsesTools(body map[string]any) {
 		filtered = append(filtered, normalized)
 	}
 	body["tools"] = filtered
-}
-
-func applyThinkingSuffix(body map[string]any, suffix, path string) {
-	effort := strings.ToLower(strings.TrimSpace(suffix))
-	budget, numericErr := strconv.Atoi(effort)
-	if numericErr == nil && budget >= 0 && path == "/v1/messages" {
-		applyClaudeBudget(body, budget)
-		return
-	}
-	if numericErr == nil && budget >= 0 {
-		effort = budgetEffort(budget)
-	}
-	switch effort {
-	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
-	default:
-		return
-	}
-	if path == "/responses" {
-		reasoning, _ := body["reasoning"].(map[string]any)
-		if reasoning == nil {
-			reasoning = make(map[string]any)
-			body["reasoning"] = reasoning
-		}
-		reasoning["effort"] = effort
-		if _, ok := reasoning["summary"]; !ok {
-			reasoning["summary"] = "auto"
-		}
-	} else if path == "/v1/messages" {
-		model, _ := body["model"].(string)
-		if strings.Contains(strings.ToLower(model), "4.6") {
-			body["thinking"] = map[string]any{"type": "adaptive"}
-			body["output_config"] = map[string]any{"effort": effort}
-		} else if effort == "auto" {
-			body["thinking"] = map[string]any{"type": "enabled"}
-		} else {
-			applyClaudeBudget(body, map[string]int{"none": 0, "minimal": 512, "low": 1024, "medium": 8192, "high": 24576, "xhigh": 32768, "max": 128000}[effort])
-		}
-	} else {
-		body["reasoning_effort"] = effort
-	}
-}
-
-func applyClaudeBudget(body map[string]any, budget int) {
-	delete(body, "output_config")
-	if budget == 0 {
-		body["thinking"] = map[string]any{"type": "disabled"}
-		return
-	}
-	if maxTokens, ok := body["max_tokens"].(float64); ok && maxTokens > 0 && budget >= int(maxTokens) {
-		budget = int(maxTokens) - 1
-	}
-	body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
-}
-
-func budgetEffort(budget int) string {
-	switch {
-	case budget == 0:
-		return "none"
-	case budget <= 512:
-		return "minimal"
-	case budget <= 1024:
-		return "low"
-	case budget <= 8192:
-		return "medium"
-	case budget <= 24576:
-		return "high"
-	default:
-		return "xhigh"
-	}
 }
 
 func normalizeCopilotReasoning(raw []byte) []byte {

@@ -7,10 +7,10 @@ and `internal/registry/kilo_models.go`.
 
 Implemented here are Kilo device authorization, auth parsing, organization
 routing, dynamic curated-free model discovery, OpenRouter chat payloads, raw
-SSE streaming, thinking suffixes, custom auth headers, typed errors,
-cancellation, and usage payload forwarding. Outbound traffic uses host HTTP
-callbacks. Global host payload override rules remain host-owned rather than
-duplicated in this plugin.
+SSE streaming, custom auth headers, typed errors, cancellation, and usage
+payload forwarding. The plugin strips thinking suffixes from upstream model
+IDs while preserving the canonical body prepared by the host thinking/payload
+pipeline. Outbound traffic uses host HTTP callbacks.
 Upstream 401/403 failures are credential-scoped, 404 is model-scoped, and
 throttling/server failures remain unscoped so host health cooldown applies;
 `Retry-After` is propagated through the typed failure envelope.

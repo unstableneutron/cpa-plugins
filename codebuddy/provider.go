@@ -130,9 +130,8 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 	if err = json.Unmarshal(req.Payload, &body); err != nil {
 		return nil, failure("invalid_request", "decode chat-completions payload: "+err.Error(), http.StatusBadRequest, "request")
 	}
-	model, suffix := modelSuffix(stripPrefix(req.Model))
+	model, _ := modelSuffix(stripPrefix(req.Model))
 	body["model"] = model
-	applyOpenAIThinking(body, suffix, false)
 	body["stream"] = true
 	body["stream_options"] = map[string]any{"include_usage": true}
 	payload, _ := json.Marshal(body)
@@ -612,41 +611,6 @@ func modelSuffix(model string) (string, string) {
 		return model, ""
 	}
 	return model[:open], model[open+1 : len(model)-1]
-}
-
-func applyOpenAIThinking(body map[string]any, suffix string, responses bool) {
-	effort := strings.ToLower(strings.TrimSpace(suffix))
-	if budget, err := strconv.Atoi(effort); err == nil && budget >= 0 {
-		switch {
-		case budget == 0:
-			effort = "none"
-		case budget <= 512:
-			effort = "minimal"
-		case budget <= 1024:
-			effort = "low"
-		case budget <= 8192:
-			effort = "medium"
-		case budget <= 24576:
-			effort = "high"
-		default:
-			effort = "xhigh"
-		}
-	}
-	switch effort {
-	case "none", "auto", "minimal", "low", "medium", "high", "xhigh", "max":
-	default:
-		return
-	}
-	if responses {
-		reasoning, _ := body["reasoning"].(map[string]any)
-		if reasoning == nil {
-			reasoning = make(map[string]any)
-			body["reasoning"] = reasoning
-		}
-		reasoning["effort"] = effort
-		return
-	}
-	body["reasoning_effort"] = effort
 }
 
 func sortedKeys[T any](values map[int]T) []int {

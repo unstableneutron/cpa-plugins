@@ -8,9 +8,10 @@ Reference sources are `internal/runtime/executor/github_copilot_executor.go`,
 Implemented here are GitHub device authorization, Copilot API-token exchange,
 trusted per-account endpoints, dynamic models, native chat/Responses/Claude
 gateway paths, vision and continuation headers, provider request normalization,
-thinking suffixes, local token counting, raw incremental streaming, typed
-errors, cancellation, and upstream usage payload forwarding. Outbound traffic
-always uses host HTTP callbacks. Token counting pins
+local token counting, raw incremental streaming, typed errors, cancellation,
+and upstream usage payload forwarding. The plugin strips thinking suffixes
+from upstream model IDs while preserving the host-prepared canonical body.
+Outbound traffic always uses host HTTP callbacks. Token counting pins
 `github.com/tiktoken-go/tokenizer` v0.8.1, also MIT licensed, whose vocabularies
 are compiled into the plugin and require no runtime download.
 Upstream 401/403 failures are credential-scoped, 404 is model-scoped, and

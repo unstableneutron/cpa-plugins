@@ -33,7 +33,7 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 		return envelope, 0
 	})
 	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
-	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm(high)", Payload: []byte(`{"model":"ignored","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
+	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm(high)", Payload: []byte(`{"model":"ignored","reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
 	result, callErr := (provider{}).Call("executor.execute", req)
 	if callErr != nil {
 		t.Fatal(callErr)
@@ -52,7 +52,7 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 	bodyRaw, _ := base64.StdEncoding.DecodeString(outbound["body"].(string))
 	var body map[string]any
 	_ = json.Unmarshal(bodyRaw, &body)
-	if body["model"] != "glm" || body["reasoning_effort"] != "high" {
+	if body["model"] != "glm" || body["reasoning_effort"] != "low" {
 		t.Fatalf("outbound body = %#v", body)
 	}
 }
