@@ -476,6 +476,9 @@ func rawHTTP(raw []byte) (any, *nativeabi.Error) {
 	if err != nil {
 		return nil, failure("invalid_auth", err.Error(), 401, "credential")
 	}
+	if r.Headers == nil {
+		r.Headers = make(http.Header)
+	}
 	r.Headers.Set("Authorization", "Basic "+token+"-"+token)
 	var resp httpResponse
 	if err = runtime.HostCall(nativeabi.MethodHostHTTPDo, hostReq(r.Method, r.URL, r.Headers, r.Body, r.HostCallbackID), &resp); err != nil {

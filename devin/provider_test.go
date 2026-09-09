@@ -215,3 +215,32 @@ func TestForwardSplitFramesAndPanicCloseExactlyOnce(t *testing.T) {
 		t.Fatalf("panic closes: plugin=%d host=%d", pluginCloses, hostCloses)
 	}
 }
+
+func TestRawHTTPPreservesBinaryEmptyAndLargeBodies(t *testing.T) {
+	for _, n := range []int{0, 4, 2 << 20} {
+		body := make([]byte, n)
+		if n > 0 {
+			body[0], body[n-1] = 0, 255
+		}
+		setHost(t, func(method string, raw []byte) (any, *nativeabi.Error) {
+			var req struct {
+				Body           []byte
+				Headers        http.Header
+				HostCallbackID string `json:"host_callback_id"`
+			}
+			if err := json.Unmarshal(raw, &req); err != nil {
+				t.Fatal(err)
+			}
+			if len(req.Body) != n || req.HostCallbackID != "cb" || !strings.HasPrefix(req.Headers.Get("Authorization"), "Basic devin-session-token$tok-") {
+				t.Fatalf("request body=%d callback=%q headers=%v", len(req.Body), req.HostCallbackID, req.Headers)
+			}
+			return httpResponse{StatusCode: 200, Body: body}, nil
+		})
+		s, _ := json.Marshal(storage{Token: "tok"})
+		raw, _ := json.Marshal(map[string]any{"Method": "POST", "URL": "https://server.codeium.com/test", "Body": body, "StorageJSON": s, "host_callback_id": "cb"})
+		result, f := rawHTTP(raw)
+		if f != nil || len(result.(httpResponse).Body) != n {
+			t.Fatalf("result=%v failure=%v", result, f)
+		}
+	}
+}

@@ -244,3 +244,40 @@ func TestForwardSplitSSEClosesExactlyOnce(t *testing.T) {
 		t.Fatalf("emits=%d plugin closes=%d host closes=%d", emits, pluginCloses, hostCloses)
 	}
 }
+
+func TestExecuteNonStreamUsesEncodedHostRequest(t *testing.T) {
+	inner := `{"id":"q1","choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`
+	envelope, _ := json.Marshal(map[string]any{"statusCodeValue": 200, "body": inner})
+	setHost(t, func(method string, raw []byte) (any, *nativeabi.Error) {
+		if method != nativeabi.MethodHostHTTPDo {
+			t.Fatalf("method=%s", method)
+		}
+		var req struct {
+			URL            string
+			Headers        http.Header
+			Body           []byte
+			HostCallbackID string `json:"host_callback_id"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.URL != chatURL || req.HostCallbackID != "cb-exec" || json.Valid(req.Body) || req.Headers.Get("Cosy-Sigpath") == "" || req.Headers.Get("X-Model-Key") != "auto" {
+			t.Fatalf("request=%+v", req)
+		}
+		return httpResponse{StatusCode: 200, Body: append(append([]byte("data: "), envelope...), []byte("\n\ndata: [DONE]\n\n")...)}, nil
+	})
+	s, _ := json.Marshal(tokenStorage{Token: "dt", UserID: "uid", MachineID: "m", ModelConfigs: map[string]json.RawMessage{"auto": json.RawMessage(`{"key":"auto","max_output_tokens":100}`)}})
+	raw, _ := json.Marshal(executorRequest{Model: "qoder/auto", Format: "openai", SourceFormat: "openai", Payload: []byte(`{"messages":[{"role":"user","content":"question"}]}`), StorageJSON: s, HostCallbackID: "cb-exec"})
+	result, failure := execute(raw, false)
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	encoded, _ := json.Marshal(result)
+	var response struct{ Payload []byte }
+	if err := json.Unmarshal(encoded, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(response.Payload), `"content":"answer"`) || !strings.Contains(string(response.Payload), `"total_tokens":3`) {
+		t.Fatalf("payload=%s", response.Payload)
+	}
+}

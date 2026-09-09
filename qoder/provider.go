@@ -599,6 +599,9 @@ func rawHTTP(raw []byte) (any, *nativeabi.Error) {
 	if e != nil {
 		return nil, fail("invalid_auth", e.Error(), 401, "credential")
 	}
+	if r.Headers == nil {
+		r.Headers = make(http.Header)
+	}
 	for k, v := range h {
 		if len(r.Headers.Values(k)) == 0 {
 			r.Headers[k] = v
