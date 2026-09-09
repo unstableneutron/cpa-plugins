@@ -88,7 +88,8 @@ func (r *Runtime) Shutdown() {
 func (r *Runtime) Call(method string, request []byte) (response []byte, status int) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			response, _ = marshalEnvelope(nil, &Error{Code: "plugin_panic", Message: fmt.Sprintf("plugin panic: %v", recovered)})
+			// Panic values may contain request bodies or credentials.
+			response, _ = marshalEnvelope(nil, &Error{Code: "plugin_panic", Message: "plugin handler panicked"})
 			status = 1
 		}
 	}()

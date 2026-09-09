@@ -82,9 +82,12 @@ func TestRuntimeRejectsReinitializationAfterShutdown(t *testing.T) {
 
 func TestRuntimeRecoversHandlerPanic(t *testing.T) {
 	var runtime Runtime
-	_ = runtime.Initialize(handlerFunc(func(string, json.RawMessage) (any, *Error) { panic("boom") }), nil)
+	_ = runtime.Initialize(handlerFunc(func(string, json.RawMessage) (any, *Error) { panic("private-request-secret") }), nil)
 	response, status := runtime.Call("panic", nil)
-	if status == 0 || !json.Valid(response) {
+	var envelope Envelope
+	err := json.Unmarshal(response, &envelope)
+	if status == 0 || err != nil || envelope.OK || envelope.Error == nil ||
+		envelope.Error.Code != "plugin_panic" || envelope.Error.Message != "plugin handler panicked" {
 		t.Fatalf("status=%d response=%s", status, response)
 	}
 }
