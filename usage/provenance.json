@@ -1,0 +1,25 @@
+{
+  "catalog": {
+    "repository": "https://github.com/router-for-me/CLIProxyAPI-Plugins-Store",
+    "commit": "30db57c833418bf59b59107aad322ab0c4f97041"
+  },
+  "plugin": {
+    "repository": "https://github.com/Fwindy/cpa-usage-statistics",
+    "tag": "v0.1.0",
+    "tag_object": "4226a32689a58e4b8f083261934825e2cba837bd",
+    "commit": "4653b2a18e3ffffa8a2cf2ea41c3e0f49be6d337",
+    "license": "MIT",
+    "release_checksums_sha256": {
+      "usage-statistics_0.1.0_darwin_amd64.zip": "430acafe9049e10d143f144d0404977b98cf4fbbeefad265eee1cbcb0f9fd0f8",
+      "usage-statistics_0.1.0_darwin_arm64.zip": "c42359247fbf2339393b59ebdda1cca516190778bdb80ecba2bd9d140e3cf691",
+      "usage-statistics_0.1.0_linux_amd64.zip": "cca743dea96980633b7e296e4317a0d87737d566e41cbc98470f6e2ceb34fec3",
+      "usage-statistics_0.1.0_linux_arm64.zip": "4de1b638a95e35561f36079d1c8efd596f9c3e30b82c43a5fcf5dbb8b7f9e5cd",
+      "usage-statistics_0.1.0_windows_amd64.zip": "9db0f687e28384bf6991adbc40ecf8355fdcbd83eeb6dd25e0b8c1993ac1d428"
+    }
+  },
+  "hosts": {
+    "plain_upstream": "7fac6b15bcfe5ea55c18c9eaec8e5b7e6457d974",
+    "schema7_baseline": "47cdb06c016302070832d1690328e556143892c9"
+  },
+  "plus_reference": "1fec8453e63a5bc133555a79164480700e351bfc"
+}

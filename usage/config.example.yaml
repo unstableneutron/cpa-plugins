@@ -1,0 +1,11 @@
+# Merge this block into config.yaml only after reviewing README.md's privacy
+# limitation. Management routes require a non-empty remote-management.secret-key.
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    usage-statistics:
+      enabled: true
+      priority: 100
+      data_dir: "/var/lib/cli-proxy-api/usage-statistics"
+      retention_days: 90

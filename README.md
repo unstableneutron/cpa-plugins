@@ -12,7 +12,9 @@ when they share a repository release version.
 2. ChatGPT backend HTTP passthrough: authenticated ingress, credential selection,
    streaming and transport policy through bounded host capabilities.
 3. Evaluate the published usage-statistics plugin instead of duplicating its
-   persistence; retain host-owned accounting correctness.
+   persistence; retain host-owned accounting correctness. The pinned
+   qualification and current privacy blocker are documented in
+   [`usage/`](usage/README.md).
 4. Test Responses/Codex/xAI overlays against upstream and remove redundant fixes.
 5. Independently extract remaining used HTTP providers after the contracts settle.
 
