@@ -58,7 +58,11 @@ import "C"
 
 import (
 	"unsafe"
+
+	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
 )
+
+var commandCodePlugin = &plugin{runtime: &pluginRuntime}
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, output *C.cliproxy_plugin_api) (status C.int) {
@@ -70,7 +74,7 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, output *C.cliproxy_plugin_a
 	if C.claim_plugin(host, output) != 0 {
 		return 1
 	}
-	err := pluginRuntime.Initialize(&plugin{runtime: &pluginRuntime}, func(method string, request []byte) ([]byte, int) {
+	err := pluginRuntime.Initialize(commandCodePlugin, func(method string, request []byte) ([]byte, int) {
 		cMethod := C.CString(method)
 		defer C.free(unsafe.Pointer(cMethod))
 		var requestPtr *C.uint8_t
@@ -131,7 +135,12 @@ func cliproxyPluginFree(ptr unsafe.Pointer, _ C.size_t) { C.free(ptr) }
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
 	defer func() { _ = recover() }()
-	pluginRuntime.Shutdown()
+	shutdownPlugin(commandCodePlugin, &pluginRuntime)
+}
+
+func shutdownPlugin(p *plugin, runtime *nativeabi.Runtime) {
+	defer runtime.Shutdown()
+	p.quiesce()
 }
 
 func main() {}

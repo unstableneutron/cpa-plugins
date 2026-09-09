@@ -86,6 +86,18 @@ func TestLifecycleReconfigureReturnsRegistration(t *testing.T) {
 			t.Fatalf("%s registration = %#v", method, result)
 		}
 	}
+	p.quiesce()
+	if _, beginErr := p.beginAsyncStream(); beginErr == nil || beginErr.Code != "plugin_quiescing" {
+		t.Fatalf("begin after quiesce = %+v", beginErr)
+	}
+	if _, callErr := p.Call(nativeabi.MethodPluginReconfigure, request); callErr != nil {
+		t.Fatal(callErr)
+	}
+	active, beginErr := p.beginAsyncStream()
+	if beginErr != nil {
+		t.Fatalf("begin after reconfigure: %v", beginErr)
+	}
+	p.finishAsyncStream(active)
 }
 
 func TestFetchModelsDecodesBufferedHostHTTPWireShape(t *testing.T) {
@@ -369,6 +381,100 @@ func TestAsyncStreamPanicClosesOnceWithoutLeakingValue(t *testing.T) {
 	case duplicate := <-closed:
 		t.Fatalf("duplicate close = %+v", duplicate)
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestShutdownDrainsBlockedAsyncStreamBeforeHostTeardown(t *testing.T) {
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	terminalClosed := make(chan struct{})
+	shutdownDone := make(chan struct{})
+	var releaseOnce, terminalOnce sync.Once
+	var mu sync.Mutex
+	activeHostCalls := 0
+	postTeardownCalls := 0
+	terminalCloseCalls := 0
+	teardown := false
+
+	var runtime nativeabi.Runtime
+	p := &plugin{runtime: &runtime}
+	if err := runtime.Initialize(p, func(method string, request []byte) ([]byte, int) {
+		mu.Lock()
+		activeHostCalls++
+		if teardown {
+			postTeardownCalls++
+		}
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			activeHostCalls--
+			mu.Unlock()
+		}()
+
+		result := any(struct{}{})
+		switch method {
+		case nativeabi.MethodHostHTTPDoStream:
+			result = streamHTTPResponse{StatusCode: 200, StreamID: "upstream"}
+		case nativeabi.MethodHostHTTPStreamRead:
+			close(readStarted)
+			<-releaseRead
+			body, _ := json.Marshal(nativeabi.Envelope{OK: false, Error: &nativeabi.Error{Code: "canceled", Message: "stream canceled", HTTPStatus: 499, Scope: "request"}})
+			return body, 1
+		case nativeabi.MethodHostHTTPStreamClose:
+			releaseOnce.Do(func() { close(releaseRead) })
+			body, _ := json.Marshal(nativeabi.Envelope{OK: false, Error: &nativeabi.Error{Code: "callback_response_failed", Message: "close response unavailable"}})
+			return body, 1
+		case nativeabi.MethodHostStreamClose:
+			var closeRequest nativeabi.StreamCloseRequest
+			_ = json.Unmarshal(request, &closeRequest)
+			if closeRequest.Failure == nil {
+				t.Error("canceled stream closed without failure")
+			}
+			mu.Lock()
+			terminalCloseCalls++
+			mu.Unlock()
+			terminalOnce.Do(func() { close(terminalClosed) })
+		}
+		body, _ := json.Marshal(nativeabi.Envelope{OK: true, Result: mustJSON(result)})
+		return body, 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, executeErr := p.executeStream(executorRequest{Model: "gpt-5.5", Payload: []byte(`{"messages":[]}`), AuthAttributes: map[string]string{"api_key": "secret", "base_url": "https://example.test"}, StreamID: "downstream"})
+	if executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	select {
+	case <-readStarted:
+	case <-t.Context().Done():
+		t.Fatal("stream read did not start")
+	}
+	go func() {
+		shutdownPlugin(p, &runtime)
+		close(shutdownDone)
+	}()
+	select {
+	case <-shutdownDone:
+	case <-t.Context().Done():
+		t.Fatal("shutdown did not drain stream")
+	}
+	select {
+	case <-terminalClosed:
+	default:
+		t.Fatal("shutdown returned before terminal stream closure")
+	}
+
+	mu.Lock()
+	teardown = true
+	mu.Unlock()
+	if _, startErr := p.executeStream(executorRequest{}); startErr == nil || startErr.Code != "plugin_quiescing" {
+		t.Fatalf("stream start after shutdown = %+v", startErr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if activeHostCalls != 0 || postTeardownCalls != 0 || terminalCloseCalls != 1 {
+		t.Fatalf("active host calls=%d post-teardown calls=%d terminal closes=%d", activeHostCalls, postTeardownCalls, terminalCloseCalls)
 	}
 }
 

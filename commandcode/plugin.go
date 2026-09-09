@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +19,16 @@ import (
 
 var pluginRuntime nativeabi.Runtime
 
-type plugin struct{ runtime *nativeabi.Runtime }
+type plugin struct {
+	runtime *nativeabi.Runtime
+
+	lifecycleMu sync.Mutex
+	quiescing   bool
+	streams     map[*asyncStream]string
+	streamWG    sync.WaitGroup
+}
+
+type asyncStream struct{ _ byte }
 
 type lifecycleRequest struct {
 	ConfigYAML    []byte `json:"config_yaml"`
@@ -139,8 +149,10 @@ func (p *plugin) Call(method string, raw json.RawMessage) (any, *nativeabi.Error
 		if request.SchemaVersion < nativeabi.SchemaVersion {
 			return nil, &nativeabi.Error{Code: "schema_unsupported", Message: "Command Code requires plugin schema 7"}
 		}
+		p.resume()
 		return registration{nativeabi.SchemaVersion, metadata{"Command Code", nativeabi.Version, "unstableneutron", "https://github.com/unstableneutron/cpa-plugins"}, capabilities{true, true, true, "both", []string{"openai"}, []string{"openai"}}}, nil
 	case nativeabi.MethodPluginQuiesce, nativeabi.MethodPluginShutdown:
+		p.quiesce()
 		return struct{}{}, nil
 	case "auth.identifier", "executor.identifier":
 		return map[string]string{"identifier": commandCodeProviderKey}, nil
@@ -263,26 +275,38 @@ func (p *plugin) execute(request executorRequest) (any, *nativeabi.Error) {
 }
 
 func (p *plugin) executeStream(request executorRequest) (any, *nativeabi.Error) {
+	active, beginErr := p.beginAsyncStream()
+	if beginErr != nil {
+		return nil, beginErr
+	}
 	prepared, prepareErr := p.prepare(request)
 	if prepareErr != nil {
+		p.finishAsyncStream(active)
 		return nil, prepareErr
 	}
 	response, openErr := p.open(request, prepared)
 	if openErr != nil {
+		p.finishAsyncStream(active)
 		return nil, openErr
 	}
+	if !p.setAsyncStreamUpstream(active, response.StreamID) {
+		p.closeHTTPStream(response.StreamID)
+		p.finishAsyncStream(active)
+		return nil, quiescingFailure()
+	}
 	go func() {
+		defer p.finishAsyncStream(active)
 		defer func() {
 			if recover() != nil {
 				p.closeOutput(request.StreamID, &nativeabi.Error{Code: "plugin_panic", Message: "Command Code stream handler panicked", HTTPStatus: 500, Scope: "request"})
 			}
 		}()
-		p.stream(request, prepared, response)
+		p.stream(request, prepared, active, response)
 	}()
 	return streamResponse{Headers: response.Headers}, nil
 }
 
-func (p *plugin) stream(request executorRequest, prepared preparedRequest, response streamHTTPResponse) {
+func (p *plugin) stream(request executorRequest, prepared preparedRequest, active *asyncStream, response streamHTTPResponse) {
 	state := newCommandCodeStreamState(request.Model)
 	state.toolSchemas = commandCodeToolSchemasFromPayload(request.Payload)
 	defer func() { p.closeHTTPStream(response.StreamID) }()
@@ -320,15 +344,96 @@ func (p *plugin) stream(request executorRequest, prepared preparedRequest, respo
 		}
 		p.closeHTTPStream(response.StreamID)
 		resetCommandCodeContinuationState(state)
+		if p.asyncStreamCanceled(active) {
+			p.closeOutput(request.StreamID, quiescingFailure())
+			return
+		}
 		var openErr *nativeabi.Error
 		response, openErr = p.open(request, prepared)
 		if openErr != nil {
 			p.closeOutput(request.StreamID, openErr)
 			return
 		}
+		if !p.setAsyncStreamUpstream(active, response.StreamID) {
+			p.closeHTTPStream(response.StreamID)
+			p.closeOutput(request.StreamID, quiescingFailure())
+			return
+		}
 	}
 	_ = p.runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: request.StreamID, Payload: []byte("[DONE]")}, nil)
 	p.closeOutput(request.StreamID, nil)
+}
+
+func (p *plugin) beginAsyncStream() (*asyncStream, *nativeabi.Error) {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.quiescing {
+		return nil, quiescingFailure()
+	}
+	if p.streams == nil {
+		p.streams = make(map[*asyncStream]string)
+	}
+	active := &asyncStream{}
+	p.streams[active] = ""
+	p.streamWG.Add(1)
+	return active, nil
+}
+
+func (p *plugin) setAsyncStreamUpstream(active *asyncStream, streamID string) bool {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	if p.quiescing {
+		return false
+	}
+	if _, exists := p.streams[active]; !exists {
+		return false
+	}
+	p.streams[active] = streamID
+	return true
+}
+
+func (p *plugin) asyncStreamCanceled(active *asyncStream) bool {
+	p.lifecycleMu.Lock()
+	defer p.lifecycleMu.Unlock()
+	_, exists := p.streams[active]
+	return p.quiescing || !exists
+}
+
+func (p *plugin) finishAsyncStream(active *asyncStream) {
+	p.lifecycleMu.Lock()
+	if _, exists := p.streams[active]; !exists {
+		p.lifecycleMu.Unlock()
+		return
+	}
+	delete(p.streams, active)
+	p.lifecycleMu.Unlock()
+	p.streamWG.Done()
+}
+
+func (p *plugin) quiesce() {
+	p.lifecycleMu.Lock()
+	p.quiescing = true
+	streamIDs := make([]string, 0, len(p.streams))
+	for _, streamID := range p.streams {
+		if streamID != "" {
+			streamIDs = append(streamIDs, streamID)
+		}
+	}
+	p.lifecycleMu.Unlock()
+	for _, streamID := range streamIDs {
+		p.closeHTTPStream(streamID)
+	}
+	p.streamWG.Wait()
+}
+
+func (p *plugin) resume() {
+	p.lifecycleMu.Lock()
+	p.quiescing = false
+	p.lifecycleMu.Unlock()
+}
+
+func quiescingFailure() *nativeabi.Error {
+	return &nativeabi.Error{Code: "plugin_quiescing", Message: "Command Code plugin is quiescing", Retryable: true, HTTPStatus: http.StatusServiceUnavailable, Scope: "request"}
 }
 
 func (p *plugin) closeOutput(streamID string, streamErr *nativeabi.Error) {
