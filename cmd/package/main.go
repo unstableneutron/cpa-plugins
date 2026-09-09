@@ -78,6 +78,11 @@ func build(version, goos, goarch, out string, plugins []string) error {
 		name := archiveName(id, version, goos, goarch)
 		path := filepath.Join(tmp, name)
 		files := []string{library, "LICENSE", filepath.Join(id, "README.md")}
+		notices, errNotices := filepath.Glob(filepath.Join(id, "*NOTICES*"))
+		if errNotices != nil {
+			return errNotices
+		}
+		files = append(files, notices...)
 		if errArchive := writeArchive(path, files); errArchive != nil {
 			return fmt.Errorf("package %s: %w", id, errArchive)
 		}
