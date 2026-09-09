@@ -29,8 +29,30 @@ legacy `COMMANDCODE_API_KEY` and `COMMANDCODE_API_BASE` aliases. Auth data
 overrides environment defaults. Credentials are never logged.
 
 This plugin parses existing auth JSON; it does not provide an interactive login
-flow. Plain CLIProxyAPI does not synthesize these credentials from the legacy
-`commandcode-api-key` YAML section.
+flow. Auth JSON is a host account-registration option, not an upstream API
+requirement. Hosts supporting environment-backed plugin accounts can instead use:
+
+```yaml
+plugins:
+  enabled: true
+  dir: plugins
+  api-keys:
+    - provider: commandcode
+      api-key-env: COMMANDCODE_API_KEY
+  configs:
+    commandcode:
+      enabled: true
+```
+
+Inject the named variable through your secret manager; never put its value in
+YAML or command arguments. This creates a nonpersistent host account for routing.
+Repeat entries with different variable names for multiple accounts; existing auth
+JSON remains supported. Missing/blank variables create no account. Restart after
+changing injected secrets. Older hosts still need auth JSON; they do not synthesize
+these credentials from the legacy `commandcode-api-key` YAML section.
+
+See [live qualification and quota findings](LIVE_QUALIFICATION.md) for the opt-in
+mise task, observed access limits, safety requirements, and remaining gaps.
 
 Live models are read from `/provider/v1/models`; the embedded 1.15.0 catalog is
 used when discovery fails or is invalid. Host model aliases and exclusions are

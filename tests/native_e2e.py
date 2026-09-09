@@ -9,6 +9,7 @@ import argparse
 import concurrent.futures
 import http.client
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -93,7 +94,7 @@ def request(port, method, path, body=None, headers=None):
         connection.close()
 
 
-def qualify(host, plugins):
+def qualify(host, plugins, environment_auth=False):
     system = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}[platform.system()]
     arch = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
     extension = {"linux": ".so", "darwin": ".dylib", "windows": ".dll"}[system]
@@ -114,12 +115,18 @@ def qualify(host, plugins):
         base = f"http://127.0.0.1:{upstream.server_address[1]}"
         auths = root / "auths"
         auths.mkdir()
-        (auths / "commandcode.json").write_text(json.dumps({
-            "type": "commandcode", "api_key": "fixture-commandcode", "base_url": base,
-        }))
+        if not environment_auth:
+            (auths / "commandcode.json").write_text(json.dumps({
+                "type": "commandcode", "api_key": "fixture-commandcode", "base_url": base,
+            }))
         (auths / "codex.json").write_text(json.dumps({
             "type": "codex", "access_token": "fixture-stored-token", "account_id": "acct-123",
         }))
+        environment_config = f'''  api-keys:
+    - provider: commandcode
+      api-key-env: CPA_FIXTURE_KEY
+      base-url: "{base}"
+''' if environment_auth else ""
         config = root / "config.yaml"
         config.write_text(f'''host: "127.0.0.1"
 port: {port}
@@ -130,7 +137,7 @@ remote-management:
 plugins:
   enabled: true
   dir: "{root / 'plugins'}"
-  configs:
+{environment_config}  configs:
     commandcode:
       enabled: true
     chatgpt-backend:
@@ -139,14 +146,16 @@ plugins:
 ''')
         try:
             with (root / "host.log").open("w+") as log:
-                process = subprocess.Popen([str(host), "--config", str(config), "--local-model"], cwd=root, stdout=log, stderr=subprocess.STDOUT)
+                process = subprocess.Popen([str(host), "--config", str(config), "--local-model"], cwd=root, stdout=log, stderr=subprocess.STDOUT,
+                                           env={**os.environ, "CPA_FIXTURE_KEY": "fixture-commandcode"})
                 try:
                     deadline = time.monotonic() + 30
                     while True:
                         assert process.poll() is None, "host exited before readiness"
                         try:
                             status, models = request(port, "GET", "/v1/models", headers={"Authorization": f"Bearer {FRONTEND_KEY}"})
-                            if status == 200 and MODEL.encode() in models:
+                            initialized = b"core auth auto-refresh started" in (root / "host.log").read_bytes()
+                            if status == 200 and MODEL.encode() in models and initialized:
                                 break
                         except OSError:
                             pass
@@ -234,6 +243,11 @@ plugins:
                         process.kill()
                         process.wait()
                     assert process.returncode == 0, f"host shutdown status {process.returncode}"
+                    if environment_auth:
+                        assert not (auths / "commandcode.json").exists()
+                        for path in auths.rglob("*"):
+                            if path.is_file():
+                                assert b"fixture-commandcode" not in path.read_bytes(), "environment key was persisted"
         finally:
             upstream.shutdown()
             upstream.server_close()
@@ -245,5 +259,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Path, required=True)
     parser.add_argument("--plugins", type=Path, required=True)
+    parser.add_argument("--environment-auth", action="store_true")
     args = parser.parse_args()
-    qualify(args.host.resolve(), args.plugins.resolve())
+    qualify(args.host.resolve(), args.plugins.resolve(), args.environment_auth)

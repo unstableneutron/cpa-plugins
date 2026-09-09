@@ -8,7 +8,7 @@ run = "go build ./..."
 
 [tasks.test]
 description = "Run all deterministic plugin tests"
-run = "go test ./..."
+run = ["go test ./...", "python3 -B -m unittest discover -s tests -p '*_test.py'"]
 
 [tasks.check]
 description = "Check formatting, vet, and workflow syntax"
@@ -30,6 +30,10 @@ run = 'go run ./cmd/package -version "${VERSION:-0.1.0}" -out dist commandcode c
 description = "Build independent ZIPs and SHA-256 checksums"
 depends = ["build"]
 
+[tasks."smoke:live"]
+description = "Opt-in low-cost Command Code qualification; requires environment-injected key"
+run = 'python3 tests/commandcode_live.py --phase "${LIVE_PHASE:-all}" --host "${HOST_CGO:?Set the locally built environment-auth host path}" --archive "${COMMANDCODE_ARCHIVE:-dist/commandcode_0.1.0_linux_amd64.zip}" --sha256 "${COMMANDCODE_SHA256:-8f199142a16de2e4c6d46ce4d422a6716b3622500dd5b8e2c6f99b51054ecdea}"'
+
 [tasks.smoke]
 description = "Smoke exact packaged libraries against CGO and purego host binaries"
 depends = ["package"]
@@ -47,6 +51,10 @@ for id in commandcode chatgpt-backend; do
 done
 python3 tests/native_e2e.py --host "$HOST_CGO" --plugins "$libs"
 python3 tests/native_e2e.py --host "$HOST_PUREGO" --plugins "$libs"
+if test "${ENVIRONMENT_AUTH_SMOKE:-0}" = 1; then
+  python3 tests/native_e2e.py --environment-auth --host "$HOST_CGO" --plugins "$libs"
+  python3 tests/native_e2e.py --environment-auth --host "$HOST_PUREGO" --plugins "$libs"
+fi
 '''
 
 [tasks."release:publish"]
