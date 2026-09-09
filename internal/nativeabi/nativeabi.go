@@ -9,6 +9,9 @@ import (
 	"sync"
 )
 
+// Version is replaced by release builds with -X.
+var Version = "dev"
+
 const (
 	ABIVersion    uint32 = 1
 	SchemaVersion uint32 = 7
@@ -53,20 +56,26 @@ type Handler interface {
 	Call(method string, request json.RawMessage) (any, *Error)
 }
 
-type HostCaller func(method string, request []byte) ([]byte, error)
+type HostCaller func(method string, request []byte) ([]byte, int)
 
 // Runtime safely publishes one handler and host callback to concurrent native calls.
 type Runtime struct {
-	mu      sync.RWMutex
-	handler Handler
-	host    HostCaller
+	mu          sync.RWMutex
+	handler     Handler
+	host        HostCaller
+	initialized bool
 }
 
-func (r *Runtime) Initialize(handler Handler, host HostCaller) {
+func (r *Runtime) Initialize(handler Handler, host HostCaller) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.initialized {
+		return fmt.Errorf("native plugin runtime was already initialized; restart is required")
+	}
+	r.initialized = true
 	r.handler = handler
 	r.host = host
-	r.mu.Unlock()
+	return nil
 }
 
 func (r *Runtime) Shutdown() {
@@ -76,18 +85,30 @@ func (r *Runtime) Shutdown() {
 	r.mu.Unlock()
 }
 
-func (r *Runtime) Call(method string, request []byte) ([]byte, int) {
+func (r *Runtime) Call(method string, request []byte) (response []byte, status int) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			response, _ = marshalEnvelope(nil, &Error{Code: "plugin_panic", Message: fmt.Sprintf("plugin panic: %v", recovered)})
+			status = 1
+		}
+	}()
 	r.mu.RLock()
 	handler := r.handler
 	r.mu.RUnlock()
 	if handler == nil {
-		return marshalEnvelope(nil, &Error{Code: "plugin_unavailable", Message: "plugin is not initialized"}), 1
+		response, _ := marshalEnvelope(nil, &Error{Code: "plugin_unavailable", Message: "plugin is not initialized"})
+		return response, 1
 	}
 	result, callErr := handler.Call(method, json.RawMessage(request))
 	if callErr != nil {
-		return marshalEnvelope(nil, callErr), 1
+		response, _ := marshalEnvelope(nil, callErr)
+		return response, 1
 	}
-	return marshalEnvelope(result, nil), 0
+	response, ok := marshalEnvelope(result, nil)
+	if !ok {
+		return response, 1
+	}
+	return response, 0
 }
 
 func (r *Runtime) HostCall(method string, request any, result any) error {
@@ -101,12 +122,12 @@ func (r *Runtime) HostCall(method string, request any, result any) error {
 	if errMarshal != nil {
 		return fmt.Errorf("marshal host callback %s: %w", method, errMarshal)
 	}
-	response, errCall := host(method, payload)
-	if errCall != nil {
-		return fmt.Errorf("host callback %s: %w", method, errCall)
-	}
+	response, status := host(method, payload)
 	var envelope Envelope
 	if errUnmarshal := json.Unmarshal(response, &envelope); errUnmarshal != nil {
+		if status != 0 {
+			return fmt.Errorf("host callback %s returned %d", method, status)
+		}
 		return fmt.Errorf("decode host callback %s: %w", method, errUnmarshal)
 	}
 	if !envelope.OK {
@@ -114,6 +135,9 @@ func (r *Runtime) HostCall(method string, request any, result any) error {
 			return fmt.Errorf("host callback %s failed", method)
 		}
 		return envelope.Error
+	}
+	if status != 0 {
+		return fmt.Errorf("host callback %s returned %d", method, status)
 	}
 	if result == nil || len(envelope.Result) == 0 {
 		return nil
@@ -137,7 +161,7 @@ type StreamCloseRequest struct {
 	Failure  *Error `json:"failure,omitempty"`
 }
 
-func marshalEnvelope(result any, callErr *Error) []byte {
+func marshalEnvelope(result any, callErr *Error) ([]byte, bool) {
 	envelope := Envelope{OK: callErr == nil, Error: callErr}
 	if callErr == nil {
 		encoded, errMarshal := json.Marshal(result)
@@ -149,5 +173,5 @@ func marshalEnvelope(result any, callErr *Error) []byte {
 		}
 	}
 	encoded, _ := json.Marshal(envelope)
-	return encoded
+	return encoded, envelope.OK
 }
