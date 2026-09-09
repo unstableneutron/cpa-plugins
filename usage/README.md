@@ -23,9 +23,12 @@ central redaction step before usage fan-out; it must preserve stable grouping
 without exposing caller or upstream credentials. Neither option makes the
 plugin a billing authority: attempt/round correctness stays host-owned.
 
-The schema-7 host also logs raw upstream failure bodies in its execution warning.
-That is independent of plugin persistence and needs redaction at the host log
-call site; changing the usage plugin cannot remove an earlier host log entry.
+The schema-7 host passes failure diagnostics through `SafeDiagnosticForLog`
+before its execution warning: output is bounded to 300 runes and known
+credential assignments, Bearer/Basic values, and URL userinfo are redacted.
+Arbitrary non-credential upstream text can remain in that sanitized excerpt, as
+the fixture marker demonstrates. This is a separate host logging-policy
+consideration, not part of the native plugin deployment blocker above.
 
 ## Pinned provenance
 
@@ -100,8 +103,9 @@ one 429 request, waits for asynchronous usage delivery, checks independent
 token totals and persisted failure diagnostics, proves management auth, restarts
 CPA against the same SQLite file, and checks caller, management, and upstream
 keys do not appear in host logs. It locks in the known v0.1.0 raw-caller-key and
-raw-failure-body persistence gaps and the separate host failure-body logging gap
-so a future release changes the qualification result visibly.
+raw-failure-body persistence gaps. It also records that arbitrary upstream text
+can survive the host's bounded, credential-redacted diagnostic sanitization so
+a future policy change updates the qualification result visibly.
 
 `config.example.yaml` is a deployment template, not an installer. No plugin is
 installed into a running CPA service by this repository.
