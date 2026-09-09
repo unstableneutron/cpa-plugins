@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.0"
+go = "1.26.6"
 actionlint = "1.7.12"
 
 [tasks.compile]
@@ -17,6 +17,10 @@ run = ['test -z "$(gofmt -l .)"', "go vet ./...", "actionlint"]
 [tasks.race]
 description = "Repeat randomized race tests for all plugin packages"
 run = "go test -race -count=2 -shuffle=on ./..."
+
+[tasks.vuln]
+description = "Check reachable vulnerabilities in release plugin sources"
+run = "go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./commandcode ./chatgpt-backend"
 
 [tasks.build]
 description = "Build/package the smoke-qualified Command Code and backend pair"
@@ -62,6 +66,7 @@ mise run check
 mise run compile
 mise run test
 mise run race
+mise run vuln
 mise run smoke
 {
   printf 'Source: https://github.com/unstableneutron/cpa-plugins\nCommit: %s\nVersion: %s\n' "$(git rev-parse HEAD)" "$VERSION"

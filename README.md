@@ -57,6 +57,7 @@ mise run check
 mise run compile
 mise run test
 mise run race
+mise run vuln
 VERSION=0.1.0 mise run package
 HOST_CGO=/absolute/path/cpa-cgo HOST_PUREGO=/absolute/path/cpa-purego \
   VERSION=0.1.0 mise run smoke
@@ -87,7 +88,8 @@ HOST_CGO=/absolute/path/cpa-cgo HOST_PUREGO=/absolute/path/cpa-purego \
 This creates a plugin-only GitHub prerelease. It refuses existing tags and does
 not trigger any application release or deployment. Live OAuth/provider calls,
 macOS/Windows execution, and production readiness are not implied by smoke tests.
-Bedrock, Kiro, CodeBuddy, Kilo, Copilot, Devin, and Qoder source is available for
-further qualification but their artifacts are excluded from this initial gate.
+Bedrock, Kiro, CodeBuddy, Kilo, Copilot, Devin, and Qoder work is preserved on a
+local qualification branch, excluded from shipped main and artifacts until
+in-flight async shutdown and provider-specific smoke qualification are complete.
 GitLab/iFlow remain unintegrated partial work. The existing usage plugin is
 excluded for the documented raw-identifier privacy blocker.
