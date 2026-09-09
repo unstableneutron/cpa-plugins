@@ -24,6 +24,8 @@ MODEL = "fixture/native-e2e"
 FRONTEND_KEY = "fixture-frontend"
 seen = []
 seen_lock = threading.Lock()
+cancel_started = threading.Event()
+cancel_observed = threading.Event()
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -48,6 +50,23 @@ class Upstream(BaseHTTPRequestHandler):
             seen.append((self.path, dict(self.headers), body))
         if self.path != "/alpha/generate":
             self.reply(404, b"{}")
+            return
+        if b"fixture-cancel-stream" in body:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b'data: {"type":"text-delta","text":"cancel-ready"}\n')
+            self.wfile.flush()
+            cancel_started.set()
+            self.connection.settimeout(15)
+            try:
+                if self.connection.recv(1) == b"":
+                    cancel_observed.set()
+            except ConnectionResetError:
+                cancel_observed.set()
+            finally:
+                self.close_connection = True
             return
         self.reply(200, (
             'data: {"type":"text-delta","text":"native-ok"}\n'
@@ -182,6 +201,22 @@ plugins:
                     normalized = {key.lower(): value for key, value in backend_request[0][1].items()}
                     assert normalized["authorization"] == "Bearer fixture-stored-token"
                     assert normalized["chatgpt-account-id"] == "acct-123"
+                    # Keep upstream open, then disconnect downstream. The native
+                    # stream must cancel the host HTTP reader instead of leaking it.
+                    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    connection.request("POST", "/v1/chat/completions", json.dumps({
+                        "model": MODEL, "stream": True,
+                        "messages": [{"role": "user", "content": "fixture-cancel-stream"}],
+                    }), headers)
+                    response = connection.getresponse()
+                    try:
+                        assert response.status == 200
+                        assert cancel_started.wait(5), "upstream stream did not start"
+                        assert b"cancel-ready" in response.readline()
+                    finally:
+                        response.close()
+                        connection.close()
+                    assert cancel_observed.wait(5), "downstream disconnect did not cancel upstream"
                 except Exception:
                     log.flush()
                     log.seek(0)
@@ -203,7 +238,7 @@ plugins:
             upstream.shutdown()
             upstream.server_close()
             thread.join()
-    print("PASS multi-library load, catalog/auth, 16 concurrent stream/nonstream calls, exact usage, backend binary/path/query/credential preservation, frontend auth, graceful shutdown")
+    print("PASS multi-library load, catalog/auth, 16 concurrent stream/nonstream calls, exact usage, backend binary/path/query/credential preservation, frontend auth, stream cancellation, graceful shutdown")
 
 
 if __name__ == "__main__":
