@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -165,25 +166,32 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 }
 
 func forwardStream(pluginStreamID, hostStreamID string) {
+	var streamFailure *nativeabi.Error
+	defer func() { _ = recover() }()
 	defer func() { _ = closeHostStream(hostStreamID) }()
+	defer func() {
+		if recover() != nil {
+			streamFailure = failure("plugin_panic", "stream forwarding panic", 0, "request")
+		}
+		closePluginStream(pluginStreamID, streamFailure)
+	}()
 	for {
 		var chunk hostStreamRead
 		if err := runtime.HostCall(nativeabi.MethodHostHTTPStreamRead, map[string]string{"stream_id": hostStreamID}, &chunk); err != nil {
-			closePluginStream(pluginStreamID, hostFailure(err))
+			streamFailure = hostFailure(err)
 			return
 		}
 		if chunk.Error != "" {
-			closePluginStream(pluginStreamID, failure("upstream_stream_error", chunk.Error, http.StatusBadGateway, "request"))
+			streamFailure = failure("upstream_stream_error", chunk.Error, http.StatusBadGateway, "request")
 			return
 		}
 		if len(chunk.Payload) > 0 {
 			if err := runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: pluginStreamID, Payload: chunk.Payload}, nil); err != nil {
-				closePluginStream(pluginStreamID, hostFailure(err))
+				streamFailure = hostFailure(err)
 				return
 			}
 		}
 		if chunk.Done {
-			closePluginStream(pluginStreamID, nil)
 			return
 		}
 	}
@@ -221,6 +229,9 @@ func rawHTTPRequest(raw []byte) (any, *nativeabi.Error) {
 	s, err := decodeStorage(req.StorageJSON, req.AuthMetadata)
 	if err != nil {
 		return nil, failure("invalid_auth", err.Error(), 401, "credential")
+	}
+	if req.Headers == nil {
+		req.Headers = make(http.Header)
 	}
 	for k, values := range chatHeaders(s) {
 		if len(req.Headers.Values(k)) == 0 {
@@ -281,8 +292,9 @@ func startLogin(raw []byte) (any, *nativeabi.Error) {
 
 func pollLogin(raw []byte) (any, *nativeabi.Error) {
 	var req struct {
-		State, HostCallbackID string
-		Metadata              map[string]any
+		State          string
+		HostCallbackID string `json:"host_callback_id"`
+		Metadata       map[string]any
 	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, failure("invalid_request", err.Error(), 400, "request")
@@ -462,12 +474,15 @@ func scopeForStatus(status int) string {
 }
 
 func aggregateSSE(raw []byte) ([]byte, error) {
+	type choiceAccumulator struct {
+		content, reasoning strings.Builder
+		finish             any
+		toolCalls          map[int]map[string]any
+	}
 	var id, model string
 	var created int64
-	var content, reasoning strings.Builder
-	var finish any
 	var usage any
-	toolCalls := map[int]map[string]any{}
+	choiceAccumulators := map[int]*choiceAccumulator{}
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if !bytes.HasPrefix(line, []byte("data:")) {
@@ -496,24 +511,30 @@ func aggregateSSE(raw []byte) ([]byte, error) {
 		choices, _ := chunk["choices"].([]any)
 		for _, c := range choices {
 			choice, _ := c.(map[string]any)
+			choiceIndex := int(number(choice["index"]))
+			accumulator := choiceAccumulators[choiceIndex]
+			if accumulator == nil {
+				accumulator = &choiceAccumulator{toolCalls: make(map[int]map[string]any)}
+				choiceAccumulators[choiceIndex] = accumulator
+			}
 			if choice["finish_reason"] != nil {
-				finish = choice["finish_reason"]
+				accumulator.finish = choice["finish_reason"]
 			}
 			delta, _ := choice["delta"].(map[string]any)
 			if v, ok := delta["content"].(string); ok {
-				content.WriteString(v)
+				accumulator.content.WriteString(v)
 			}
 			if v, ok := delta["reasoning_content"].(string); ok {
-				reasoning.WriteString(v)
+				accumulator.reasoning.WriteString(v)
 			}
 			calls, _ := delta["tool_calls"].([]any)
 			for _, rawCall := range calls {
 				call, _ := rawCall.(map[string]any)
 				idx := int(number(call["index"]))
-				acc := toolCalls[idx]
+				acc := accumulator.toolCalls[idx]
 				if acc == nil {
 					acc = map[string]any{"index": idx, "type": "function", "function": map[string]any{"name": "", "arguments": ""}}
-					toolCalls[idx] = acc
+					accumulator.toolCalls[idx] = acc
 				}
 				if v, ok := call["id"].(string); ok && v != "" {
 					acc["id"] = v
@@ -529,30 +550,44 @@ func aggregateSSE(raw []byte) ([]byte, error) {
 			}
 		}
 	}
-	if id == "" && content.Len() == 0 && len(toolCalls) == 0 {
+	if id == "" && len(choiceAccumulators) == 0 {
 		return nil, fmt.Errorf("CodeBuddy stream contained no completion chunks")
 	}
-	message := map[string]any{"role": "assistant", "content": content.String()}
-	if reasoning.Len() > 0 {
-		message["reasoning_content"] = reasoning.String()
-	}
-	if len(toolCalls) > 0 {
-		ordered := make([]any, 0, len(toolCalls))
-		for i := 0; i < len(toolCalls); i++ {
-			if tc := toolCalls[i]; tc != nil {
+	choiceIndexes := sortedKeys(choiceAccumulators)
+	resultChoices := make([]any, 0, len(choiceIndexes))
+	for _, choiceIndex := range choiceIndexes {
+		accumulator := choiceAccumulators[choiceIndex]
+		message := map[string]any{"role": "assistant", "content": accumulator.content.String()}
+		if accumulator.reasoning.Len() > 0 {
+			message["reasoning_content"] = accumulator.reasoning.String()
+		}
+		if len(accumulator.toolCalls) > 0 {
+			toolIndexes := sortedKeys(accumulator.toolCalls)
+			ordered := make([]any, 0, len(toolIndexes))
+			for _, toolIndex := range toolIndexes {
+				tc := accumulator.toolCalls[toolIndex]
 				delete(tc, "index")
 				ordered = append(ordered, tc)
 			}
+			message["tool_calls"] = ordered
 		}
-		message["tool_calls"] = ordered
+		resultChoices = append(resultChoices, map[string]any{"index": choiceIndex, "message": message, "finish_reason": accumulator.finish})
 	}
-	result := map[string]any{"id": id, "object": "chat.completion", "created": created, "model": model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}}
+	result := map[string]any{"id": id, "object": "chat.completion", "created": created, "model": model, "choices": resultChoices}
 	if usage != nil {
 		result["usage"] = usage
 	}
 	return json.Marshal(result)
 }
 func number(v any) float64 { n, _ := v.(float64); return n }
+func sortedKeys[T any](values map[int]T) []int {
+	keys := make([]int, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+	return keys
+}
 
 func models() []map[string]any {
 	definitions := []struct {

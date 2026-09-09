@@ -6,11 +6,22 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
 )
+
+func initializeTestRuntime(t *testing.T, host nativeabi.HostCaller) {
+	t.Helper()
+	runtime = nativeabi.Runtime{}
+	if err := runtime.Initialize(provider{}, host); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(runtime.Shutdown)
+}
 
 func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 	var outbound map[string]any
-	runtime.Initialize(provider{}, func(method string, request []byte) ([]byte, int) {
+	initializeTestRuntime(t, func(method string, request []byte) ([]byte, int) {
 		if method != "host.http.do" {
 			t.Fatalf("method = %q", method)
 		}
@@ -21,7 +32,6 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
 		return envelope, 0
 	})
-	t.Cleanup(runtime.Shutdown)
 	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
 	req, _ := json.Marshal(executorRequest{Model: "codebuddy/glm", Payload: []byte(`{"model":"ignored","messages":[{"role":"user","content":"hi"}]}`), StorageJSON: storageJSON})
 	result, callErr := (provider{}).Call("executor.execute", req)
@@ -38,6 +48,26 @@ func TestExecuteUsesHostHTTPAndAggregatesStream(t *testing.T) {
 	}
 	if outbound["url"] != baseURL+"/v2/chat/completions" {
 		t.Fatalf("url = %#v", outbound["url"])
+	}
+}
+
+func TestRawHTTPRequestInitializesMissingHeaders(t *testing.T) {
+	initializeTestRuntime(t, func(_ string, request []byte) ([]byte, int) {
+		var outbound map[string]any
+		if err := json.Unmarshal(request, &outbound); err != nil {
+			t.Fatal(err)
+		}
+		if outbound["headers"] == nil {
+			t.Fatal("host request headers are nil")
+		}
+		result, _ := json.Marshal(httpResponse{StatusCode: http.StatusNoContent})
+		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
+		return envelope, 0
+	})
+	storageJSON, _ := json.Marshal(tokenStorage{AccessToken: "secret", UserID: "u"})
+	raw, _ := json.Marshal(map[string]any{"StorageJSON": storageJSON, "Method": "GET", "URL": "https://example.test"})
+	if _, callErr := rawHTTPRequest(raw); callErr != nil {
+		t.Fatal(callErr)
 	}
 }
 
@@ -67,6 +97,53 @@ func TestAggregateSSEPreservesReasoningToolsAndUsage(t *testing.T) {
 	}
 	if body["usage"].(map[string]any)["total_tokens"] != float64(14) {
 		t.Fatalf("usage = %#v", body["usage"])
+	}
+}
+
+func TestAggregateSSEPreservesSparseToolsAndMultipleChoices(t *testing.T) {
+	raw := strings.Join([]string{
+		`data: {"id":"chat-2","choices":[{"index":2,"delta":{"content":"second","tool_calls":[{"index":3,"id":"call-3","function":{"name":"later","arguments":"{"}}]}},{"index":0,"delta":{"content":"first"}}]}`,
+		`data: {"id":"chat-2","choices":[{"index":2,"delta":{"tool_calls":[{"index":3,"function":{"arguments":"}"}}]},"finish_reason":"tool_calls"},{"index":0,"delta":{"content":" choice"},"finish_reason":"stop"}]}`,
+	}, "\n\n")
+	got, err := aggregateSSE([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got, &body); err != nil {
+		t.Fatal(err)
+	}
+	choices := body["choices"].([]any)
+	if len(choices) != 2 || choices[0].(map[string]any)["index"] != float64(0) || choices[1].(map[string]any)["index"] != float64(2) {
+		t.Fatalf("choices = %#v", choices)
+	}
+	if choices[0].(map[string]any)["message"].(map[string]any)["content"] != "first choice" {
+		t.Fatalf("choice 0 = %#v", choices[0])
+	}
+	tools := choices[1].(map[string]any)["message"].(map[string]any)["tool_calls"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["id"] != "call-3" {
+		t.Fatalf("tools = %#v", tools)
+	}
+}
+
+func TestForwardStreamContainsPanicAndClosesOnce(t *testing.T) {
+	var reads, pluginCloses, hostCloses int
+	initializeTestRuntime(t, func(method string, request []byte) ([]byte, int) {
+		switch method {
+		case nativeabi.MethodHostHTTPStreamRead:
+			reads++
+			panic("upstream callback panic")
+		case nativeabi.MethodHostStreamClose:
+			pluginCloses++
+		case nativeabi.MethodHostHTTPStreamClose:
+			hostCloses++
+		}
+		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": map[string]any{}})
+		return envelope, 0
+	})
+	forwardStream("plugin-stream", "host-stream")
+	if reads != 1 || pluginCloses != 1 || hostCloses != 1 {
+		t.Fatalf("reads=%d plugin closes=%d host closes=%d", reads, pluginCloses, hostCloses)
 	}
 }
 

@@ -131,25 +131,32 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 }
 
 func forward(pluginID, hostID string) {
+	var streamFailure *nativeabi.Error
+	defer func() { _ = recover() }()
 	defer func() { _ = closeHost(hostID) }()
+	defer func() {
+		if recover() != nil {
+			streamFailure = fail("plugin_panic", "stream forwarding panic", 0, "request")
+		}
+		closePlugin(pluginID, streamFailure)
+	}()
 	for {
 		var chunk streamRead
 		if err := runtime.HostCall(nativeabi.MethodHostHTTPStreamRead, map[string]string{"stream_id": hostID}, &chunk); err != nil {
-			closePlugin(pluginID, hostFail(err))
+			streamFailure = hostFail(err)
 			return
 		}
 		if chunk.Error != "" {
-			closePlugin(pluginID, fail("upstream_stream_error", chunk.Error, 502, "request"))
+			streamFailure = fail("upstream_stream_error", chunk.Error, 502, "request")
 			return
 		}
 		if len(chunk.Payload) > 0 {
 			if err := runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: pluginID, Payload: chunk.Payload}, nil); err != nil {
-				closePlugin(pluginID, hostFail(err))
+				streamFailure = hostFail(err)
 				return
 			}
 		}
 		if chunk.Done {
-			closePlugin(pluginID, nil)
 			return
 		}
 	}
@@ -214,7 +221,10 @@ func startLogin(raw []byte) (any, *nativeabi.Error) {
 	return map[string]any{"Provider": providerID, "URL": data.VerificationURL, "State": data.Code, "ExpiresAt": time.Now().Add(time.Duration(data.ExpiresIn) * time.Second)}, nil
 }
 func pollLogin(raw []byte) (any, *nativeabi.Error) {
-	var req struct{ State, HostCallbackID string }
+	var req struct {
+		State          string
+		HostCallbackID string `json:"host_callback_id"`
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fail("invalid_request", err.Error(), 400, "request")
 	}

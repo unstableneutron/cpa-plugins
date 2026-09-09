@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
 )
 
 func TestExecuteExchangesTokenThenUsesResponsesEndpoint(t *testing.T) {
 	var calls []map[string]any
-	runtime.Initialize(provider{}, func(method string, request []byte) ([]byte, int) {
+	runtime = nativeabi.Runtime{}
+	if err := runtime.Initialize(provider{}, func(method string, request []byte) ([]byte, int) {
 		var outbound map[string]any
 		_ = json.Unmarshal(request, &outbound)
 		calls = append(calls, outbound)
@@ -21,7 +24,9 @@ func TestExecuteExchangesTokenThenUsesResponsesEndpoint(t *testing.T) {
 		result, _ := json.Marshal(response)
 		envelope, _ := json.Marshal(map[string]any{"ok": true, "result": json.RawMessage(result)})
 		return envelope, 0
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(runtime.Shutdown)
 	stored, _ := json.Marshal(storage{AccessToken: "github-token"})
 	req, _ := json.Marshal(request{Model: "github-copilot/gpt-5", SourceFormat: "responses", Payload: []byte(`{"input":"hi"}`), StorageJSON: stored})

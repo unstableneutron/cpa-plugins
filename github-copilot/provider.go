@@ -268,7 +268,10 @@ func startLogin(raw []byte) (any, *nativeabi.Error) {
 	return map[string]any{"Provider": providerID, "URL": d.VerificationURI, "State": string(stateRaw), "ExpiresAt": time.Now().Add(time.Duration(d.ExpiresIn) * time.Second), "Metadata": map[string]any{"user_code": d.UserCode}}, nil
 }
 func pollLogin(raw []byte) (any, *nativeabi.Error) {
-	var req struct{ State, HostCallbackID string }
+	var req struct {
+		State          string
+		HostCallbackID string `json:"host_callback_id"`
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, fail("invalid_request", err.Error(), 400, "request")
 	}
@@ -420,25 +423,32 @@ func rawHTTP(raw []byte) (any, *nativeabi.Error) {
 	return resp, nil
 }
 func forward(pluginID, hostID string) {
+	var streamFailure *nativeabi.Error
+	defer func() { _ = recover() }()
 	defer func() { _ = closeHost(hostID) }()
+	defer func() {
+		if recover() != nil {
+			streamFailure = fail("plugin_panic", "stream forwarding panic", 0, "request")
+		}
+		closePlugin(pluginID, streamFailure)
+	}()
 	for {
 		var c streamRead
 		if err := runtime.HostCall(nativeabi.MethodHostHTTPStreamRead, map[string]string{"stream_id": hostID}, &c); err != nil {
-			closePlugin(pluginID, hostFail(err))
+			streamFailure = hostFail(err)
 			return
 		}
 		if c.Error != "" {
-			closePlugin(pluginID, fail("upstream_stream_error", c.Error, 502, "request"))
+			streamFailure = fail("upstream_stream_error", c.Error, 502, "request")
 			return
 		}
 		if len(c.Payload) > 0 {
 			if err := runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: pluginID, Payload: c.Payload}, nil); err != nil {
-				closePlugin(pluginID, hostFail(err))
+				streamFailure = hostFail(err)
 				return
 			}
 		}
 		if c.Done {
-			closePlugin(pluginID, nil)
 			return
 		}
 	}

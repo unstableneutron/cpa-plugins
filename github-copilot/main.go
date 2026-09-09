@@ -38,13 +38,13 @@ func main() {}
 
 //export cliproxy_plugin_init
 func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
-	if host == nil || plugin == nil || uint32(host.abi_version) != nativeabi.ABIVersion {
+	if host == nil || plugin == nil || host.call == nil || host.free_buffer == nil || uint32(host.abi_version) != nativeabi.ABIVersion {
 		return 1
 	}
-	C.store_host_api(host)
 	if err := runtime.Initialize(provider{}, hostCall); err != nil {
 		return 1
 	}
+	C.store_host_api(host)
 	plugin.abi_version = C.uint32_t(nativeabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
 	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
@@ -58,7 +58,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 		response.ptr = nil
 		response.len = 0
 	}
-	if method == nil {
+	if method == nil || (request == nil && requestLen != 0) || requestLen > C.size_t(1<<31-1) {
 		return 1
 	}
 	var requestBytes []byte
@@ -90,10 +90,15 @@ func hostCall(method string, request []byte) ([]byte, int) {
 	}
 	var response C.cliproxy_buffer
 	status := C.call_host_api(cMethod, cRequest, C.size_t(len(request)), &response)
+	if response.ptr != nil {
+		defer C.free_host_buffer(response.ptr, response.len)
+	}
 	if response.ptr == nil || response.len == 0 {
 		return nil, int(status)
 	}
-	defer C.free_host_buffer(response.ptr, response.len)
+	if response.len > C.size_t(1<<31-1) {
+		return nil, 1
+	}
 	return C.GoBytes(response.ptr, C.int(response.len)), int(status)
 }
 
