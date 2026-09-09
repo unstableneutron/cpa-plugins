@@ -131,7 +131,7 @@ type streamReadResponse struct {
 
 func (p *plugin) Call(method string, raw json.RawMessage) (any, *nativeabi.Error) {
 	switch method {
-	case nativeabi.MethodPluginRegister:
+	case nativeabi.MethodPluginRegister, nativeabi.MethodPluginReconfigure:
 		var request lifecycleRequest
 		if err := json.Unmarshal(raw, &request); err != nil {
 			return nil, failure(err)
@@ -140,7 +140,7 @@ func (p *plugin) Call(method string, raw json.RawMessage) (any, *nativeabi.Error
 			return nil, &nativeabi.Error{Code: "schema_unsupported", Message: "Command Code requires plugin schema 7"}
 		}
 		return registration{nativeabi.SchemaVersion, metadata{"Command Code", nativeabi.Version, "unstableneutron", "https://github.com/unstableneutron/cpa-plugins"}, capabilities{true, true, true, "both", []string{"openai"}, []string{"openai"}}}, nil
-	case nativeabi.MethodPluginQuiesce, nativeabi.MethodPluginReconfigure, nativeabi.MethodPluginShutdown:
+	case nativeabi.MethodPluginQuiesce, nativeabi.MethodPluginShutdown:
 		return struct{}{}, nil
 	case "auth.identifier", "executor.identifier":
 		return map[string]string{"identifier": commandCodeProviderKey}, nil

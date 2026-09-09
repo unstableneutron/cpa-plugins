@@ -73,6 +73,21 @@ func TestConfiguredModelsApplyAliasAndExclusion(t *testing.T) {
 	}
 }
 
+func TestLifecycleReconfigureReturnsRegistration(t *testing.T) {
+	p := &plugin{}
+	request := mustJSON(lifecycleRequest{SchemaVersion: nativeabi.SchemaVersion, ConfigYAML: []byte("provider: commandcode")})
+	for _, method := range []string{nativeabi.MethodPluginRegister, nativeabi.MethodPluginReconfigure} {
+		result, callErr := p.Call(method, request)
+		if callErr != nil {
+			t.Fatalf("%s: %v", method, callErr)
+		}
+		got, ok := result.(registration)
+		if !ok || got.SchemaVersion != nativeabi.SchemaVersion || got.Metadata.Name != "Command Code" || !got.Capabilities.Executor || !got.Capabilities.ModelProvider {
+			t.Fatalf("%s registration = %#v", method, result)
+		}
+	}
+}
+
 func TestFetchModelsDecodesBufferedHostHTTPWireShape(t *testing.T) {
 	var runtime nativeabi.Runtime
 	if err := runtime.Initialize(nil, func(method string, _ []byte) ([]byte, int) {
