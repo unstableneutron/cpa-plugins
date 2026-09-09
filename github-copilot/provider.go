@@ -359,7 +359,7 @@ func discoverModels(raw []byte) (any, *nativeabi.Error) {
 	}
 	s, err := credentials(req.StorageJSON, req.AuthMetadata)
 	if err != nil {
-		return nil, fail("invalid_auth", err.Error(), 401, "credential")
+		return map[string]any{"Provider": providerID, "Models": []any{}}, nil
 	}
 	token, endpoint, f := exchangeToken(s.AccessToken, req.HostCallbackID)
 	if f != nil {
