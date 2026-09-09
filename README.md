@@ -69,6 +69,8 @@ CI calls the same tasks. `build`/`package` currently select only `commandcode` a
 `checksums.txt` containing SHA-256 checksums. Artifacts are not committed. The
 initial publication gate supports Linux amd64 only; Go target naming is used
 (`amd64`, not `x86_64`). Other platforms require their own smoke qualification.
+The initial Linux binaries require glibc 2.34 or later; they are not musl/Alpine
+binaries. Build locally for a different libc or older distribution.
 
 Both libraries use ABI 1. Command Code advertises schema 7; backend ingress
 requires host schema 8. Use the schema-8 host source accompanying this migration,

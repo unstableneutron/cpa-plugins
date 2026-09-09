@@ -72,10 +72,14 @@ mise run smoke
   printf 'Source: https://github.com/unstableneutron/cpa-plugins\nCommit: %s\nVersion: %s\n' "$(git rev-parse HEAD)" "$VERSION"
   printf 'Platform: linux/amd64\nABI: 1\nCommand Code schema: 7\nChatGPT backend minimum schema: 8\n'
   go version
+  cc --version | head -n 1
+  ldd --version | head -n 1
   printf '\nSmoke host SHA-256:\n'
   sha256sum "$HOST_CGO" "$HOST_PUREGO"
+  printf '\nSmoke host build provenance:\n'
+  go version -m "$HOST_CGO" "$HOST_PUREGO"
 } > dist/BUILDINFO.txt
 gh release create "v$VERSION" --target "$(git rev-parse HEAD)" --title "Native plugins v$VERSION" --prerelease \
-  --notes 'Command Code and ChatGPT backend only. Linux amd64; ABI 1, backend requires host schema 8. Deterministic CGO and purego real-server smoke passed. No live provider or macOS/Windows qualification. Other provider artifacts are intentionally excluded.' \
+  --notes 'Command Code and ChatGPT backend only. Linux amd64, glibc >=2.34; ABI 1, backend requires host schema 8. Deterministic CGO and purego real-server smoke passed. No live provider or macOS/Windows qualification. Other provider artifacts are intentionally excluded.' \
   "dist/commandcode_${VERSION}_linux_amd64.zip" "dist/chatgpt-backend_${VERSION}_linux_amd64.zip" dist/checksums.txt dist/BUILDINFO.txt
 '''
