@@ -156,7 +156,7 @@ func execute(raw []byte, stream bool) (any, *nativeabi.Error) {
 			_ = closeHost(up.StreamID)
 			return nil, upstreamFailure(fmt.Sprintf("GitHub Copilot returned HTTP %d", up.StatusCode), up.StatusCode, up.Headers)
 		}
-		go forward(req.StreamID, up.StreamID)
+		go forward(req.StreamID, up.StreamID, path == "/chat/completions")
 		return map[string]any{"headers": up.Headers}, nil
 	}
 	var up httpResponse
@@ -429,8 +429,12 @@ func rawHTTP(raw []byte) (any, *nativeabi.Error) {
 	}
 	return resp, nil
 }
-func forward(pluginID, hostID string) {
+func forward(pluginID, hostID string, normalizeReasoning bool) {
 	var streamFailure *nativeabi.Error
+	var normalizer *sseReasoningNormalizer
+	if normalizeReasoning {
+		normalizer = &sseReasoningNormalizer{}
+	}
 	defer func() { _ = recover() }()
 	defer func() { _ = closeHost(hostID) }()
 	defer func() {
@@ -449,8 +453,12 @@ func forward(pluginID, hostID string) {
 			streamFailure = fail("upstream_stream_error", c.Error, 502, "request")
 			return
 		}
-		if len(c.Payload) > 0 {
-			if err := runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: pluginID, Payload: c.Payload}, nil); err != nil {
+		payload := c.Payload
+		if normalizer != nil {
+			payload = normalizer.Push(payload, c.Done)
+		}
+		if len(payload) > 0 {
+			if err := runtime.HostCall(nativeabi.MethodHostStreamEmit, nativeabi.StreamEmitRequest{StreamID: pluginID, Payload: payload}, nil); err != nil {
 				streamFailure = hostFail(err)
 				return
 			}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/unstableneutron/cpa-plugins/internal/nativeabi"
@@ -97,6 +98,17 @@ func TestNormalizeChatFlattensAssistantAndReasoningResponse(t *testing.T) {
 	choices := decoded["choices"].([]any)
 	if choices[0].(map[string]any)["message"].(map[string]any)["reasoning_content"] != "why" || choices[1].(map[string]any)["message"].(map[string]any)["reasoning_content"] != "kept" {
 		t.Fatalf("response = %#v", decoded)
+	}
+}
+
+func TestSSEReasoningNormalizationHandlesFragmentedEvents(t *testing.T) {
+	normalizer := &sseReasoningNormalizer{}
+	if got := normalizer.Push([]byte(`data: {"choices":[{"delta":{"reasoning_`), false); len(got) != 0 {
+		t.Fatalf("premature output = %q", got)
+	}
+	got := normalizer.Push([]byte("text\":\"why\"}}]}\n\ndata: [DONE]\n\n"), true)
+	if !strings.Contains(string(got), `"reasoning_content":"why"`) || !strings.Contains(string(got), "data: [DONE]") {
+		t.Fatalf("normalized stream = %q", got)
 	}
 }
 func TestCredentialsAcceptsStorageAndLegacyMetadata(t *testing.T) {

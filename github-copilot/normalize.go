@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -325,4 +326,55 @@ func normalizeCopilotReasoning(raw []byte) []byte {
 		return raw
 	}
 	return encoded
+}
+
+type sseReasoningNormalizer struct {
+	pending []byte
+}
+
+func (n *sseReasoningNormalizer) Push(chunk []byte, final bool) []byte {
+	n.pending = append(n.pending, chunk...)
+	var output []byte
+	for {
+		index, separatorLength := nextSSESeparator(n.pending)
+		if index < 0 {
+			break
+		}
+		output = append(output, normalizeSSEEvent(n.pending[:index])...)
+		output = append(output, n.pending[index:index+separatorLength]...)
+		n.pending = n.pending[index+separatorLength:]
+	}
+	if final && len(n.pending) > 0 {
+		output = append(output, normalizeSSEEvent(n.pending)...)
+		n.pending = nil
+	}
+	return output
+}
+
+func nextSSESeparator(raw []byte) (int, int) {
+	lf := bytes.Index(raw, []byte("\n\n"))
+	crlf := bytes.Index(raw, []byte("\r\n\r\n"))
+	if lf < 0 {
+		return crlf, 4
+	}
+	if crlf < 0 || lf < crlf {
+		return lf, 2
+	}
+	return crlf, 4
+}
+
+func normalizeSSEEvent(event []byte) []byte {
+	lines := bytes.Split(event, []byte("\n"))
+	for index, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		lines[index] = append([]byte("data: "), normalizeCopilotReasoning(data)...)
+	}
+	return bytes.Join(lines, []byte("\n"))
 }
