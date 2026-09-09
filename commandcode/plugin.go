@@ -112,10 +112,14 @@ type httpWireProfile struct {
 	DisableAutoCompression bool     `json:"disable_auto_compression,omitempty"`
 	HeaderProfile          []string `json:"header_profile,omitempty"`
 }
-type httpResponse struct {
+type bufferedHTTPResponse struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+}
+type streamHTTPResponse struct {
 	StatusCode int         `json:"status_code"`
 	Headers    http.Header `json:"headers"`
-	Body       []byte      `json:"body"`
 	StreamID   string      `json:"stream_id"`
 }
 type streamReadResponse struct {
@@ -188,29 +192,33 @@ func (p *plugin) Call(method string, raw json.RawMessage) (any, *nativeabi.Error
 	}
 }
 
-func (p *plugin) prepare(request executorRequest) ([]byte, string, string, string, *nativeabi.Error) {
+type preparedRequest struct {
+	Body    []byte
+	Target  string
+	Headers http.Header
+}
+
+func (p *plugin) prepare(request executorRequest) (preparedRequest, *nativeabi.Error) {
 	baseURL, apiKey := credentials(request.StorageJSON, request.AuthMetadata, request.AuthAttributes)
 	if apiKey == "" {
-		return nil, "", "", "", &nativeabi.Error{Code: "unauthorized", Message: "missing CommandCode API key", HTTPStatus: 401, Scope: "credential"}
+		return preparedRequest{}, &nativeabi.Error{Code: "unauthorized", Message: "missing CommandCode API key", HTTPStatus: 401, Scope: "credential"}
 	}
 	model := strings.TrimSpace(request.Model)
 	threadID := commandCodeThreadID(executionOptions{request.Headers, request.Metadata}, request.OriginalRequest)
 	body, err := buildCommandCodePayload(commandCodePayloadOptions{Model: model, Payload: request.Payload, WorkingDir: ".", Environment: defaultCommandCodeEnvironment(), ThreadID: threadID})
 	if err != nil {
-		return nil, "", "", "", failure(err)
+		return preparedRequest{}, failure(err)
 	}
-	return body, model, strings.TrimRight(baseURL, "/") + "/alpha/generate", threadID, nil
+	return preparedRequest{
+		Body:    body,
+		Target:  strings.TrimRight(baseURL, "/") + "/alpha/generate",
+		Headers: commandCodeHeaders(apiKey, threadID, request.AuthAttributes),
+	}, nil
 }
 
-func (p *plugin) open(request executorRequest) (httpResponse, *nativeabi.Error) {
-	body, _, target, session, errPrepare := p.prepare(request)
-	if errPrepare != nil {
-		return httpResponse{}, errPrepare
-	}
-	_, apiKey := credentials(request.StorageJSON, request.AuthMetadata, request.AuthAttributes)
-	headers := commandCodeHeaders(apiKey, session, request.AuthAttributes)
-	var response httpResponse
-	if err := p.runtime.HostCall(nativeabi.MethodHostHTTPDoStream, httpRequest{HostCallbackID: request.HostCallbackID, Method: http.MethodPost, URL: target, Headers: headers, Body: body}, &response); err != nil {
+func (p *plugin) open(request executorRequest, prepared preparedRequest) (streamHTTPResponse, *nativeabi.Error) {
+	var response streamHTTPResponse
+	if err := p.runtime.HostCall(nativeabi.MethodHostHTTPDoStream, httpRequest{HostCallbackID: request.HostCallbackID, Method: http.MethodPost, URL: prepared.Target, Headers: prepared.Headers, Body: prepared.Body}, &response); err != nil {
 		return response, failure(err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -226,7 +234,11 @@ func (p *plugin) open(request executorRequest) (httpResponse, *nativeabi.Error) 
 }
 
 func (p *plugin) execute(request executorRequest) (any, *nativeabi.Error) {
-	response, openErr := p.open(request)
+	prepared, prepareErr := p.prepare(request)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	response, openErr := p.open(request, prepared)
 	if openErr != nil {
 		return nil, openErr
 	}
@@ -242,7 +254,7 @@ func (p *plugin) execute(request executorRequest) (any, *nativeabi.Error) {
 		}
 		p.closeHTTPStream(response.StreamID)
 		resetCommandCodeContinuationState(state)
-		response, openErr = p.open(request)
+		response, openErr = p.open(request, prepared)
 		if openErr != nil {
 			return nil, openErr
 		}
@@ -251,7 +263,11 @@ func (p *plugin) execute(request executorRequest) (any, *nativeabi.Error) {
 }
 
 func (p *plugin) executeStream(request executorRequest) (any, *nativeabi.Error) {
-	response, openErr := p.open(request)
+	prepared, prepareErr := p.prepare(request)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	response, openErr := p.open(request, prepared)
 	if openErr != nil {
 		return nil, openErr
 	}
@@ -261,12 +277,12 @@ func (p *plugin) executeStream(request executorRequest) (any, *nativeabi.Error) 
 				p.closeOutput(request.StreamID, &nativeabi.Error{Code: "plugin_panic", Message: "Command Code stream handler panicked", HTTPStatus: 500, Scope: "request"})
 			}
 		}()
-		p.stream(request, response)
+		p.stream(request, prepared, response)
 	}()
 	return streamResponse{Headers: response.Headers}, nil
 }
 
-func (p *plugin) stream(request executorRequest, response httpResponse) {
+func (p *plugin) stream(request executorRequest, prepared preparedRequest, response streamHTTPResponse) {
 	state := newCommandCodeStreamState(request.Model)
 	state.toolSchemas = commandCodeToolSchemasFromPayload(request.Payload)
 	defer func() { p.closeHTTPStream(response.StreamID) }()
@@ -305,7 +321,7 @@ func (p *plugin) stream(request executorRequest, response httpResponse) {
 		p.closeHTTPStream(response.StreamID)
 		resetCommandCodeContinuationState(state)
 		var openErr *nativeabi.Error
-		response, openErr = p.open(request)
+		response, openErr = p.open(request, prepared)
 		if openErr != nil {
 			p.closeOutput(request.StreamID, openErr)
 			return
@@ -361,7 +377,7 @@ func (r *hostStreamReader) Read(dst []byte) (int, error) {
 func (p *plugin) fetchModels(request authModelRequest) []*ModelInfo {
 	baseURL, apiKey := credentials(request.StorageJSON, request.Metadata, request.Attributes)
 	headers := commandCodeHeaders(apiKey, "", request.Attributes)
-	var response httpResponse
+	var response bufferedHTTPResponse
 	err := p.runtime.HostCall(nativeabi.MethodHostHTTPDo, httpRequest{HostCallbackID: request.HostCallbackID, Method: http.MethodGet, URL: strings.TrimRight(baseURL, "/") + "/provider/v1/models", Headers: headers}, &response)
 	if err != nil || response.StatusCode < 200 || response.StatusCode >= 300 {
 		return getCommandCodeModels()

@@ -19,15 +19,18 @@ unloaded/reinitialized in-process.
 
 ## Configuration and auth
 
-The provider identifier is `commandcode`. Existing `commandcode-api-key`
-credentials synthesized by CLIProxyAPI are accepted, as are auth JSON files
-with `type: "commandcode"` and any of `api_key`, `apiKey`, `access_token`, or
-`access`. `base_url`/`baseURL` overrides the default
+The provider identifier is `commandcode`. Put an auth JSON file in the host's
+configured auth directory with `type: "commandcode"` and any of `api_key`,
+`apiKey`, `access_token`, or `access`. `base_url`/`baseURL` overrides the default
 `https://api.commandcode.ai`. `header:<Name>` auth attributes are forwarded as
 custom upstream headers. The canonical `COMMAND_CODE_API_KEY` and
 `COMMANDCODE_API_URL` environment variables retain precedence over their
 legacy `COMMANDCODE_API_KEY` and `COMMANDCODE_API_BASE` aliases. Auth data
 overrides environment defaults. Credentials are never logged.
+
+This plugin parses existing auth JSON; it does not provide an interactive login
+flow. Plain CLIProxyAPI does not synthesize these credentials from the legacy
+`commandcode-api-key` YAML section.
 
 Live models are read from `/provider/v1/models`; the embedded 1.15.0 catalog is
 used when discovery fails or is invalid. Host model aliases and exclusions are

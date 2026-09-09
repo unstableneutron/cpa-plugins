@@ -73,6 +73,24 @@ func TestConfiguredModelsApplyAliasAndExclusion(t *testing.T) {
 	}
 }
 
+func TestFetchModelsDecodesBufferedHostHTTPWireShape(t *testing.T) {
+	var runtime nativeabi.Runtime
+	if err := runtime.Initialize(nil, func(method string, _ []byte) ([]byte, int) {
+		if method != nativeabi.MethodHostHTTPDo {
+			t.Fatalf("method = %q", method)
+		}
+		result := bufferedHTTPResponse{StatusCode: 200, Headers: map[string][]string{"Content-Type": {"application/json"}}, Body: []byte(`{"data":[{"id":"live/only-model","name":"Live Only","context_length":32000}]}`)}
+		body, _ := json.Marshal(nativeabi.Envelope{OK: true, Result: mustJSON(result)})
+		return body, 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+	models := (&plugin{runtime: &runtime}).fetchModels(authModelRequest{Attributes: map[string]string{"api_key": "secret", "base_url": "https://example.test"}})
+	if len(models) != 1 || models[0].ID != "live/only-model" || models[0].MaxCompletionTokens != 32000 {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
 func TestCountTokensIsNonzeroAndDeterministic(t *testing.T) {
 	request := executorRequest{Model: "gpt-5", Payload: []byte(`{"messages":[{"role":"user","content":"hello world"}]}`)}
 	first, firstErr := countTokens(request)
@@ -98,7 +116,7 @@ func TestExecuteStreamReturnsBeforeIncrementalUpstreamCompletes(t *testing.T) {
 		result := any(struct{}{})
 		switch method {
 		case nativeabi.MethodHostHTTPDoStream:
-			result = httpResponse{StatusCode: 200, StreamID: "upstream", Headers: map[string][]string{"Content-Type": {"text/event-stream"}}}
+			result = streamHTTPResponse{StatusCode: 200, StreamID: "upstream", Headers: map[string][]string{"Content-Type": {"text/event-stream"}}}
 		case nativeabi.MethodHostHTTPStreamRead:
 			reads++
 			if reads == 1 {
@@ -179,7 +197,7 @@ func TestExecuteContinuesPauseTurnOnSameThread(t *testing.T) {
 			openCount++
 			sessions = append(sessions, upstream.Headers.Get("x-session-id"))
 			threadIDs = append(threadIDs, gjson.GetBytes(upstream.Body, "threadId").String())
-			result = httpResponse{StatusCode: 200, StreamID: string(rune('0' + openCount))}
+			result = streamHTTPResponse{StatusCode: 200, StreamID: string(rune('0' + openCount))}
 		case nativeabi.MethodHostHTTPStreamRead:
 			var read map[string]string
 			_ = json.Unmarshal(request, &read)
@@ -195,7 +213,7 @@ func TestExecuteContinuesPauseTurnOnSameThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &plugin{runtime: &runtime}
-	result, executeErr := p.execute(executorRequest{Model: "deepseek/deepseek-v4-flash", Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`), OriginalRequest: []byte(`{"session_id":"stable-client"}`), AuthAttributes: map[string]string{"api_key": "secret", "base_url": "https://example.test"}})
+	result, executeErr := p.execute(executorRequest{Model: "deepseek/deepseek-v4-flash", Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`), AuthAttributes: map[string]string{"api_key": "secret", "base_url": "https://example.test"}})
 	if executeErr != nil {
 		t.Fatal(executeErr)
 	}
@@ -205,6 +223,67 @@ func TestExecuteContinuesPauseTurnOnSameThread(t *testing.T) {
 	}
 	if sessions[0] == "" || sessions[0] != sessions[1] || threadIDs[0] != threadIDs[1] || sessions[0] != threadIDs[0] {
 		t.Fatalf("sessions=%v threads=%v", sessions, threadIDs)
+	}
+}
+
+func TestExecuteStreamContinuesPauseTurnWithoutClientSession(t *testing.T) {
+	var mu sync.Mutex
+	var bodies [][]byte
+	var sessions []string
+	openCount := 0
+	closed := make(chan nativeabi.StreamCloseRequest, 1)
+	var runtime nativeabi.Runtime
+	if err := runtime.Initialize(nil, func(method string, request []byte) ([]byte, int) {
+		result := any(struct{}{})
+		switch method {
+		case nativeabi.MethodHostHTTPDoStream:
+			var upstream httpRequest
+			_ = json.Unmarshal(request, &upstream)
+			mu.Lock()
+			openCount++
+			bodies = append(bodies, append([]byte(nil), upstream.Body...))
+			sessions = append(sessions, upstream.Headers.Get("x-session-id"))
+			streamID := string(rune('0' + openCount))
+			mu.Unlock()
+			result = streamHTTPResponse{StatusCode: 200, StreamID: streamID}
+		case nativeabi.MethodHostHTTPStreamRead:
+			var read map[string]string
+			_ = json.Unmarshal(request, &read)
+			if read["stream_id"] == "1" {
+				result = streamReadResponse{Payload: []byte("data: {\"type\":\"finish\",\"finishReason\":\"pause_turn\"}\n"), Done: true}
+			} else {
+				result = streamReadResponse{Payload: []byte("data: {\"type\":\"finish\",\"finishReason\":\"stop\"}\n"), Done: true}
+			}
+		case nativeabi.MethodHostStreamClose:
+			var closeRequest nativeabi.StreamCloseRequest
+			_ = json.Unmarshal(request, &closeRequest)
+			closed <- closeRequest
+		}
+		body, _ := json.Marshal(nativeabi.Envelope{OK: true, Result: mustJSON(result)})
+		return body, 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := &plugin{runtime: &runtime}
+	_, executeErr := p.executeStream(executorRequest{Model: "gpt-5.5", Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`), AuthAttributes: map[string]string{"api_key": "secret", "base_url": "https://example.test"}, StreamID: "downstream"})
+	if executeErr != nil {
+		t.Fatal(executeErr)
+	}
+	select {
+	case closeRequest := <-closed:
+		if closeRequest.Failure != nil {
+			t.Fatalf("close = %+v", closeRequest)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not close")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if openCount != 2 || len(bodies) != 2 || !json.Valid(bodies[0]) || string(bodies[0]) != string(bodies[1]) {
+		t.Fatalf("opens=%d bodies=%q", openCount, bodies)
+	}
+	if sessions[0] == "" || sessions[0] != sessions[1] || sessions[0] != gjson.GetBytes(bodies[0], "threadId").String() {
+		t.Fatalf("sessions=%v thread=%q", sessions, gjson.GetBytes(bodies[0], "threadId").String())
 	}
 }
 
@@ -243,7 +322,7 @@ func TestAsyncStreamPanicClosesOnceWithoutLeakingValue(t *testing.T) {
 		result := any(struct{}{})
 		switch method {
 		case nativeabi.MethodHostHTTPDoStream:
-			result = httpResponse{StatusCode: 200, StreamID: "upstream"}
+			result = streamHTTPResponse{StatusCode: 200, StreamID: "upstream"}
 		case nativeabi.MethodHostHTTPStreamRead:
 			result = streamReadResponse{Payload: []byte("data: {\"type\":\"text-delta\",\"text\":\"trigger\"}\n"), Done: true}
 		case nativeabi.MethodHostStreamEmit:
