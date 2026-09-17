@@ -7,12 +7,12 @@ description = "Compile all native plugin packages (requires a C compiler)"
 run = "go build ./..."
 
 [tasks.test]
-description = "Run all deterministic plugin tests"
+description = "Run all deterministic plugin and release-task tests"
 run = ["go test ./...", "python3 -B -m unittest discover -s tests -p '*_test.py'"]
 
 [tasks.check]
-description = "Check formatting, vet, and workflow syntax"
-run = ['test -z "$(gofmt -l .)"', "go vet ./...", "actionlint"]
+description = "Check formatting, vet, workflow syntax and whitespace"
+run = ['test -z "$(gofmt -l .)"', "go vet ./...", "actionlint", "git diff --check"]
 
 [tasks.race]
 description = "Repeat randomized race tests for all plugin packages"
@@ -22,76 +22,20 @@ run = "go test -race -count=2 -shuffle=on ./..."
 description = "Check reachable vulnerabilities in release plugin sources"
 run = "go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./commandcode ./chatgpt-backend"
 
-[tasks.build]
-description = "Build/package the smoke-qualified Command Code and backend pair"
-run = 'go run ./cmd/package -version "${VERSION:-0.1.0}" -out dist commandcode chatgpt-backend'
-
 [tasks.package]
-description = "Build independent ZIPs and SHA-256 checksums"
-depends = ["build"]
-
-[tasks."smoke:live"]
-description = "Opt-in low-cost Command Code qualification; requires environment-injected key"
-run = 'python3 tests/commandcode_live.py --phase "${LIVE_PHASE:-all}" --host "${HOST_CGO:?Set the locally built environment-auth host path}" --archive "${COMMANDCODE_ARCHIVE:-dist/commandcode_0.1.0_linux_amd64.zip}" --sha256 "${COMMANDCODE_SHA256:-8f199142a16de2e4c6d46ce4d422a6716b3622500dd5b8e2c6f99b51054ecdea}"'
+description = "Package clean source: VERSION required, ARCH=amd64 or arm64, CC for cross builds"
+alias = "build"
+run = "python3 -B tools/release.py package"
 
 [tasks.smoke]
-description = "Smoke exact packaged libraries against CGO and purego host binaries"
-depends = ["package"]
-run = '''
-set -eu
-: "${HOST_CGO:?Set HOST_CGO to a reviewed default-loader host binary}"
-: "${HOST_PUREGO:?Set HOST_PUREGO to a reviewed CGO_ENABLED=0 plugin_purego host binary}"
-test "$(uname -s)" = Linux && test "$(uname -m)" = x86_64
-# Check from the archive directory because checksum entries are relative names.
-(cd dist && sha256sum --check checksums.txt)
-libs=$(mktemp -d)
-trap 'rm -rf "$libs"' EXIT
-for id in commandcode chatgpt-backend; do
-  unzip -jo "dist/${id}_${VERSION:-0.1.0}_linux_amd64.zip" '*.so' -d "$libs"
-done
-for failure in unsupported_model upgrade_required; do
-  python3 tests/native_e2e.py --qualification-failure "$failure" --host "$HOST_CGO" --plugins "$libs"
-  python3 tests/native_e2e.py --qualification-failure "$failure" --host "$HOST_PUREGO" --plugins "$libs"
-done
-if test "${ENVIRONMENT_AUTH_SMOKE:-0}" = 1; then
-  for failure in unsupported_model upgrade_required; do
-    python3 tests/native_e2e.py --environment-auth --qualification-failure "$failure" --host "$HOST_CGO" --plugins "$libs"
-    python3 tests/native_e2e.py --environment-auth --qualification-failure "$failure" --host "$HOST_PUREGO" --plugins "$libs"
-  done
-fi
-'''
+description = "Qualify existing ZIPs with HOST_CGO/HOST_PUREGO; no rebuild or live provider calls"
+run = "python3 -B tools/release.py smoke"
+
+[tasks."smoke:live"]
+description = "Opt-in live Command Code qualification; explicit archive and checksum required"
+run = 'python3 tests/commandcode_live.py --phase "${LIVE_PHASE:-all}" --host "${HOST_CGO:?}" --archive "${COMMANDCODE_ARCHIVE:?}" --sha256 "${COMMANDCODE_SHA256:?}"'
 
 [tasks."release:publish"]
-description = "Validate and publish only the smoke-qualified plugin pair from pushed main"
-run = '''
-set -eu
-: "${VERSION:?Set VERSION to the plugin release version without v}"
-test "$(git branch --show-current)" = main
-test -z "$(git status --porcelain)"
-git fetch origin main --tags
-test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
-  echo "Release tag already exists; refusing to replace artifacts" >&2
-  exit 1
-fi
-mise run check
-mise run compile
-mise run test
-mise run race
-mise run vuln
-mise run smoke
-{
-  printf 'Source: https://github.com/unstableneutron/cpa-plugins\nCommit: %s\nVersion: %s\n' "$(git rev-parse HEAD)" "$VERSION"
-  printf 'Platform: linux/amd64\nABI: 1\nCommand Code schema: 7\nChatGPT backend minimum schema: 8\n'
-  go version
-  cc --version | head -n 1
-  ldd --version | head -n 1
-  printf '\nSmoke host SHA-256:\n'
-  sha256sum "$HOST_CGO" "$HOST_PUREGO"
-  printf '\nSmoke host build provenance:\n'
-  go version -m "$HOST_CGO" "$HOST_PUREGO"
-} > dist/BUILDINFO.txt
-gh release create "v$VERSION" --target "$(git rev-parse HEAD)" --title "Native plugins v$VERSION" --prerelease \
-  --notes 'Command Code and ChatGPT backend only. Linux amd64, glibc >=2.34; ABI 1, backend requires host schema 8. Deterministic CGO and purego real-server smoke passed. No live provider or macOS/Windows qualification. Other provider artifacts are intentionally excluded.' \
-  "dist/commandcode_${VERSION}_linux_amd64.zip" "dist/chatgpt-backend_${VERSION}_linux_amd64.zip" dist/checksums.txt dist/BUILDINFO.txt
-'''
+description = "Rerun gates and publish both Linux targets; VERSION and HOST_DIR required"
+confirm = { message = "Publish the clean plugin commit as a plugin-only prerelease?", default = "no" }
+run = "python3 -B tools/release.py publish"

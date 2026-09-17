@@ -46,50 +46,79 @@ the host loader choice does not make a Go `c-shared` library safely unloadable.
 
 ## Reproducible tasks and release boundary
 
-Install mise, then run `mise install`. Native builds require a working C compiler.
-Smoke tests also require Python 3, unzip, SHA-256 utilities, and separately built
-reviewed CPA executables: default CGO and `CGO_ENABLED=0 -tags plugin_purego`.
-Publication requires authenticated `gh` with release permission. No live provider
-credentials are needed for the deterministic tests.
+Ship defaults to source only: normal pushes, never published-history rewrites.
+Run check/test/race/vuln, commit, rerun against clean source, then fetch origin
+immediately before pushing and stop if it changed. Plugin publication requires
+separate authorization for this repository, exact source, new version and artifact
+set. CPA-only changes never authorize plugin publication. Never tag/release CPA,
+deploy services, expose credentials, or package auth files through these tasks.
+
+Install mise, then `mise install`. Builds require a C compiler; qualification uses
+Python 3, readelf, and separately built clean CPA hosts. No live credentials are
+needed. In CPA, `HOST_DIR=/tmp/cpa-hosts ARCH=amd64 mise run build:smoke` produces
+`linux_amd64/cpa-cgo` and `cpa-purego`. Repeat with `ARCH=arm64 CC=aarch64-linux-gnu-gcc`.
+The plugin smoke validates both targets, distinct loader settings, clean matching
+host revisions and hashes; BUILDINFO includes only allowlisted provenance.
 
 ```bash
 mise run check
-mise run compile
 mise run test
 mise run race
 mise run vuln
-VERSION=0.1.0 mise run package
-HOST_CGO=/absolute/path/cpa-cgo HOST_PUREGO=/absolute/path/cpa-purego \
-  VERSION=0.1.0 mise run smoke
+VERSION=0.1.1 ARCH=amd64 mise run package
+VERSION=0.1.1 ARCH=arm64 CC=aarch64-linux-gnu-gcc mise run package
+VERSION=0.1.1 ARCH=amd64 HOST_CGO=/tmp/cpa-hosts/linux_amd64/cpa-cgo \
+  HOST_PUREGO=/tmp/cpa-hosts/linux_amd64/cpa-purego mise run smoke
+VERSION=0.1.1 ARCH=arm64 HOST_CGO=/tmp/cpa-hosts/linux_arm64/cpa-cgo \
+  HOST_PUREGO=/tmp/cpa-hosts/linux_arm64/cpa-purego mise run smoke
 ```
 
-CI calls the same tasks. `build`/`package` currently select only `commandcode` and
-`chatgpt-backend`: the pair covered by combined real-server smoke. Output is
-`dist/<plugin>_<version>_<os>_<arch>.zip`, with the library at the ZIP root and
-`checksums.txt` containing SHA-256 checksums. Artifacts are not committed. The
-initial publication gate supports Linux amd64 only; Go target naming is used
-(`amd64`, not `x86_64`). Other platforms require their own smoke qualification.
-The initial Linux binaries require glibc 2.34 or later; they are not musl/Alpine
-binaries. Build locally for a different libc or older distribution.
+Versions above are examples, not publication authorization. `package` (`build`
+alias) captures/rechecks clean HEAD; optionally set `PLUGIN_COMMIT` to an approved
+SHA. Outputs are isolated under `dist/<version>/linux_<arch>/`, with deterministic
+`<plugin>_<version>_linux_<arch>.zip` names, root-level libraries, `BUILDINFO.json`
+and SHA-256 `checksums.txt`. `smoke` never rebuilds: it verifies/extracts those ZIPs
+and tests both loader/account modes and denial classifications. It records ELF
+architecture, dependencies, GLIBC symbols and native/emulated execution. Both
+libraries use ABI 1; Command Code schema 7, backend minimum host schema 8.
 
-Both libraries use ABI 1. Command Code advertises schema 7; backend ingress
-requires host schema 8. Use the schema-8 host source accompanying this migration,
-not an older binary merely because it supports the purego loader. Plugin helper
-version is injected at build time. Provider provenance is pinned above and in
-each provider README; release `BUILDINFO.txt` records the exact plugin commit,
-toolchain, version, and checksums of the host executables used for smoke tests.
-
-After an authorized normal source push, publication is explicit and reruns the
-gates against that exact clean, pushed commit:
+For same-orb arm64 qualification on Debian 12 amd64, the tested provisioning is:
 
 ```bash
-HOST_CGO=/absolute/path/cpa-cgo HOST_PUREGO=/absolute/path/cpa-purego \
-  VERSION=0.1.0 mise run release:publish
+sudo apt-get install gcc-aarch64-linux-gnu=4:12.2.0-3 \
+  gcc-12-aarch64-linux-gnu=12.2.0-14cross1 binutils-aarch64-linux-gnu=2.40-2 \
+  libc6-dev-arm64-cross=2.36-8cross1 libc6-arm64-cross=2.36-8cross1 \
+  qemu-user=1:7.2+dfsg-7+deb12u18+b3
 ```
 
-This creates a plugin-only GitHub prerelease. It refuses existing tags and does
-not trigger any application release or deployment. Live OAuth/provider calls,
-macOS/Windows execution, and production readiness are not implied by smoke tests.
+Cross smoke uses `qemu-aarch64 -L /usr/aarch64-linux-gnu` (override sysroot with
+`ARM64_SYSROOT`). Pin and requalify toolchain/sysroot/emulator updates; package
+availability may require a Debian snapshot. Compilation alone is not qualification.
+The libc runtime tested here is 2.36; ELF symbol requirements are recorded, not a
+claim that an older runtime was tested. These are glibc, not musl/Alpine artifacts.
+macOS requires a macOS runner for load/callback/shutdown qualification and is
+excluded from this Linux-only publisher. CI currently runs check/compile/test/race,
+not cross-platform smoke or publication. Live smoke remains separate and opt-in.
+
+After an authorized source push, publish the exact four ZIPs only when BOTH Linux
+targets qualify. The publisher reruns check/test/race/vuln and all smoke against
+the supplied host pairs without rebuilding packages:
+
+```bash
+VERSION=<new-authorized-version> HOST_DIR=/tmp/cpa-hosts \
+  PLUGIN_COMMIT=<optional-approved-sha> mise run release:publish
+```
+
+Publication requires authenticated `gh`, confirmation, clean source matching the
+explicit repository's main, and a new tag. It creates only a prerelease with
+`latest=false`, four ZIPs, two target BUILDINFO files and combined checksums.
+It downloads the published set and compares its manifest and hashes. This detects
+post-publication problems; it is not an atomic preventive gate. Existing tags and
+partial failures stop: inspect tag target/assets/checksums; never overwrite or
+claim idempotent resume. Stable promotion needs separate authorization and
+qualification. When host compatibility with v0.1.0 matters, verify downloaded
+release checksums and exercise those extracted libraries too; do not rebuild them.
+
 Bedrock, Kiro, CodeBuddy, Kilo, Copilot, Devin, and Qoder work is preserved on a
 local qualification branch, excluded from shipped main and artifacts until
 in-flight async shutdown and provider-specific smoke qualification are complete.

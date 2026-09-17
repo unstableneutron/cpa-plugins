@@ -120,11 +120,11 @@ def request(port, method, path, body=None, headers=None):
         connection.close()
 
 
-def qualify(host, plugins, environment_auth=False, failure_code="unsupported_model"):
+def qualify(host, plugins, environment_auth=False, failure_code="unsupported_model", target_arch=None, runner=()):
     global qualification_failure
     qualification_failure = failure_code
     system = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}[platform.system()]
-    arch = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
+    arch = target_arch or {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
     extension = {"linux": ".so", "darwin": ".dylib", "windows": ".dll"}[system]
     with tempfile.TemporaryDirectory(prefix="cpa-native-e2e-") as temporary:
         root = Path(temporary)
@@ -178,7 +178,7 @@ plugins:
 ''')
         try:
             with (root / "host.log").open("w+") as log:
-                process = subprocess.Popen([str(host), "--config", str(config), "--local-model"], cwd=root, stdout=log, stderr=subprocess.STDOUT,
+                process = subprocess.Popen([*runner, str(host), "--config", str(config), "--local-model"], cwd=root, stdout=log, stderr=subprocess.STDOUT,
                                            env={**os.environ, "COMMAND_CODE_API_KEY": "fixture-dummy-canonical", "COMMANDCODE_API_KEY": "fixture-dummy-legacy",
                                                 "CPA_FIXTURE_KEY_A": ACCOUNT_A_KEY, "CPA_FIXTURE_KEY_B": ACCOUNT_B_KEY})
                 try:
@@ -187,12 +187,19 @@ plugins:
                         assert process.poll() is None, "host exited before readiness"
                         try:
                             status, models = request(port, "GET", "/v1/models", headers={"Authorization": f"Bearer {FRONTEND_KEY}"})
-                            initialized = b"core auth auto-refresh started" in (root / "host.log").read_bytes()
-                            if status == 200 and MODEL.encode() in models and initialized:
-                                break
+                            if status == 200 and MODEL.encode() in models:
+                                # A catalog entry and an auto-refresh log do not prove
+                                # that config-backed credentials are schedulable yet.
+                                status, response = request(port, "POST", "/v1/chat/completions", json.dumps({
+                                    "model": MODEL, "messages": [{"role": "user", "content": "readiness"}],
+                                }), {"Authorization": f"Bearer {FRONTEND_KEY}", "Content-Type": "application/json"})
+                                if status == 200:
+                                    assert json.loads(response)["choices"][0]["message"]["content"] == "native-ok", response
+                                    break
+                                assert status == 503 and b"auth_not_found" in response, (status, response)
                         except OSError:
                             pass
-                        assert time.monotonic() < deadline, "CommandCode model not registered"
+                        assert time.monotonic() < deadline, "CommandCode model/auth not ready"
                         time.sleep(0.1)
                     headers = {"Authorization": f"Bearer {FRONTEND_KEY}", "Content-Type": "application/json"}
 
@@ -320,5 +327,7 @@ if __name__ == "__main__":
     parser.add_argument("--plugins", type=Path, required=True)
     parser.add_argument("--environment-auth", action="store_true")
     parser.add_argument("--qualification-failure", choices=("unsupported_model", "upgrade_required"), default="unsupported_model")
+    parser.add_argument("--arch", choices=("amd64", "arm64"))
+    parser.add_argument("--runner", nargs=argparse.REMAINDER, default=[])
     args = parser.parse_args()
-    qualify(args.host.resolve(), args.plugins.resolve(), args.environment_auth, args.qualification_failure)
+    qualify(args.host.resolve(), args.plugins.resolve(), args.environment_auth, args.qualification_failure, args.arch, args.runner)
