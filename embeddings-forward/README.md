@@ -18,9 +18,10 @@ precedence anyway. Only enabled modules register routes, so a disabled module
 answers 404. Requests without a valid client key get 401 before the plugin
 runs. Streaming is not supported.
 
-Requires a CPA host with plugin schema 9 (body-aware ingress handler routes,
-`unstableneutron/CLIProxyAPI` branch `feat/ingress-handler-routes`). Older
-hosts reject the library at registration instead of serving it partially.
+Requires a CPA host with plugin schema 9 (body-aware ingress handler routes),
+on `unstableneutron/CLIProxyAPI` main since commit `23d0b65c` and in the first
+fork release after v8.0.42-un.1. Older hosts reject the library at
+registration instead of serving it partially.
 
 ## Behaviour
 
