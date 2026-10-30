@@ -79,8 +79,10 @@ SHA. Outputs are isolated under `dist/<version>/linux_<arch>/`, with determinist
 `<plugin>_<version>_linux_<arch>.zip` names, root-level libraries, `BUILDINFO.json`
 and SHA-256 `checksums.txt`. `smoke` never rebuilds: it verifies/extracts those ZIPs
 and tests both loader/account modes and denial classifications. It records ELF
-architecture, dependencies, GLIBC symbols and native/emulated execution. Both
-libraries use ABI 1; Command Code schema 7, backend minimum host schema 8.
+architecture, dependencies, GLIBC symbols and native/emulated execution. All
+libraries use ABI 1; Command Code schema 7, backend minimum host schema 8,
+[embeddings-forward](embeddings-forward/README.md) minimum host schema 9. Smoke also
+runs `tests/forward_e2e.py` once per host for embeddings-forward.
 
 For same-orb arm64 qualification on Debian 12 amd64, the tested provisioning is:
 
@@ -100,7 +102,7 @@ macOS requires a macOS runner for load/callback/shutdown qualification and is
 excluded from this Linux-only publisher. CI currently runs check/compile/test/race,
 not cross-platform smoke or publication. Live smoke remains separate and opt-in.
 
-After an authorized source push, publish the exact four ZIPs only when BOTH Linux
+After an authorized source push, publish the exact six ZIPs only when BOTH Linux
 targets qualify. The publisher reruns check/test/race/vuln and all smoke against
 the supplied host pairs without rebuilding packages:
 
@@ -111,7 +113,7 @@ VERSION=<new-authorized-version> HOST_DIR=/tmp/cpa-hosts \
 
 Publication requires authenticated `gh`, confirmation, clean source matching the
 explicit repository's main, and a new tag. It creates only a prerelease with
-`latest=false`, four ZIPs, two target BUILDINFO files and combined checksums.
+`latest=false`, six ZIPs, two target BUILDINFO files and combined checksums.
 It downloads the published set and compares its manifest and hashes. This detects
 post-publication problems; it is not an atomic preventive gate. Existing tags and
 partial failures stop: inspect tag target/assets/checksums; never overwrite or

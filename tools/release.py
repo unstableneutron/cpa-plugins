@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 
 REPO = "unstableneutron/cpa-plugins"
-PLUGINS = ("commandcode", "chatgpt-backend")
+PLUGINS = ("commandcode", "chatgpt-backend", "embeddings-forward")
 ARCHES = ("amd64", "arm64")
 
 
@@ -90,7 +90,7 @@ def package(version, arch, directory, commit):
     source(commit)
     compiler = shlex.split(os.environ.get("CC", "cc"))
     info = {"repository": REPO, "commit": commit, "version": version, "target": f"linux/{arch}",
-            "abi": 1, "schemas": {"commandcode": 7, "chatgpt-backend-minimum-host": 8},
+            "abi": 1, "schemas": {"commandcode": 7, "chatgpt-backend-minimum-host": 8, "embeddings-forward-minimum-host": 9},
             "go": run("go", "env", "GOVERSION"), "gcc": run(*compiler, "-dumpfullversion")}
     write_info(directory, info, archives(version, arch))
 
@@ -134,6 +134,8 @@ def smoke(version, arch, directory, commit, cgo, purego):
                     if runner:
                         command += ["--runner", *runner]
                     subprocess.run(command, check=True)
+            command = [sys.executable, "-B", "tests/forward_e2e.py", "--host", str(host), "--plugins", str(libs)]
+            subprocess.run(command + (["--runner", *runner] if runner else []), check=True)
     source(commit)
     # Detect binaries or ZIPs replaced while qualification was running.
     require(provenance == [host_info(host, arch, mode) for host, mode in zip(hosts, (False, True))], "smoke hosts changed")
@@ -183,7 +185,8 @@ def publish(version, root, commit):
             "-f", f"ref=refs/tags/v{version}", "-f", f"sha={commit}")
         print(run("gh", "release", "create", f"v{version}", "--repo", REPO, "--verify-tag",
                   "--title", f"Native plugins v{version}", "--prerelease", "--latest=false",
-                  "--notes", "Command Code and ChatGPT backend; Linux amd64 and arm64. ABI 1; backend needs host schema 8. "
+                  "--notes", "Command Code, ChatGPT backend and embeddings-forward; Linux amd64 and arm64. ABI 1; backend needs host schema 8, "
+                  "embeddings-forward host schema 9. "
                   "See per-target BUILDINFO for libc requirements and native/emulated qualification. No live provider or macOS qualification.",
                   *(str(stage / name) for name in [*names, "checksums.txt"])))
         download = stage / "download"

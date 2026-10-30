@@ -17,6 +17,8 @@ const (
 	SchemaVersion uint32 = 7
 	// SchemaVersionIngressProxy is required only by plugins using ingress plans.
 	SchemaVersionIngressProxy uint32 = 8
+	// SchemaVersionIngressHandler is required only by plugins using body-aware ingress handler routes.
+	SchemaVersionIngressHandler uint32 = 9
 )
 
 const (

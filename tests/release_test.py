@@ -76,9 +76,10 @@ class ReleaseTests(unittest.TestCase):
              patch.object(release.subprocess, "run") as execute:
             release.smoke(VERSION, "amd64", directory, COMMIT, "cgo", "purego")
             commands = [call.args[0] for call in execute.call_args_list]
-            self.assertEqual(len(commands), 8)
+            self.assertEqual(len(commands), 10)
             self.assertEqual(sum("--environment-auth" in cmd for cmd in commands), 4)
-            self.assertTrue(all("tests/native_e2e.py" in cmd for cmd in commands))
+            self.assertEqual(sum("tests/native_e2e.py" in cmd for cmd in commands), 8)
+            self.assertEqual(sum("tests/forward_e2e.py" in cmd for cmd in commands), 2)
             self.assertEqual(release.manifest(directory, release.archives(VERSION, "amd64")), before)
             execute.side_effect = subprocess.CalledProcessError(1, "fixture")
             with self.assertRaises(subprocess.CalledProcessError):
@@ -104,7 +105,7 @@ class ReleaseTests(unittest.TestCase):
                             if name.startswith("/"):
                                 path = Path(name)
                                 uploaded[path.name] = path.read_bytes()
-                        self.assertEqual(len(uploaded), 7)
+                        self.assertEqual(len(uploaded), 9)
                     if args[:3] == ("gh", "release", "download"):
                         if scenario == "download":
                             raise subprocess.CalledProcessError(1, "gh download")
