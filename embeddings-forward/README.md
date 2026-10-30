@@ -19,9 +19,8 @@ answers 404. Requests without a valid client key get 401 before the plugin
 runs. Streaming is not supported.
 
 Requires a CPA host with plugin schema 9 (body-aware ingress handler routes),
-on `unstableneutron/CLIProxyAPI` main since commit `23d0b65c` and in the first
-fork release after v8.0.42-un.1. Older hosts reject the library at
-registration instead of serving it partially.
+`unstableneutron/CLIProxyAPI` v8.0.48-un.1 or later. Older hosts reject the
+library at registration instead of serving it partially.
 
 ## Behaviour
 
@@ -68,8 +67,10 @@ registration instead of serving it partially.
 
 ```yaml
 plugins:
+  enabled: true
   configs:
     embeddings-forward:
+      enabled: true          # the host loads only enabled plugin IDs
       embeddings:            # rerank has the same shape
         enabled: true
         providers:
@@ -95,6 +96,9 @@ plugins:
               - {name: "respan/span-01-lite:free", string_instructions: true}
 ```
 
+Install the library from the release ZIP as
+`<plugins.dir>/linux/<amd64|arm64>/embeddings-forward.so` and restart CPA.
+
 The default paths are `/embeddings`, `/rerank`, `/alpha/decisions` (`api:
 decisions`) and `/v1/systemone` (`api: systemone`), appended to `base_url`.
 `string_instructions: true` JSON-encodes object or array question
@@ -119,6 +123,7 @@ plugins:
   enabled: true
   configs:
     embeddings-forward:
+      enabled: true
       embeddings:
         enabled: true
         providers:
