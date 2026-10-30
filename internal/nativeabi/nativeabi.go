@@ -126,7 +126,16 @@ func (r *Runtime) HostCall(method string, request any, result any) error {
 		return fmt.Errorf("marshal host callback %s: %w", method, errMarshal)
 	}
 	response, status := host(method, payload)
-	var envelope Envelope
+	// Decode the result in the same pass as the envelope: large HTTP bodies
+	// would otherwise be scanned and copied twice.
+	var envelope struct {
+		OK     bool   `json:"ok"`
+		Result any    `json:"result,omitempty"`
+		Error  *Error `json:"error,omitempty"`
+	}
+	if result != nil {
+		envelope.Result = result
+	}
 	if errUnmarshal := json.Unmarshal(response, &envelope); errUnmarshal != nil {
 		if status != 0 {
 			return fmt.Errorf("host callback %s returned %d", method, status)
@@ -141,12 +150,6 @@ func (r *Runtime) HostCall(method string, request any, result any) error {
 	}
 	if status != 0 {
 		return fmt.Errorf("host callback %s returned %d", method, status)
-	}
-	if result == nil || len(envelope.Result) == 0 {
-		return nil
-	}
-	if errUnmarshal := json.Unmarshal(envelope.Result, result); errUnmarshal != nil {
-		return fmt.Errorf("decode host callback %s result: %w", method, errUnmarshal)
 	}
 	return nil
 }
@@ -165,16 +168,17 @@ type StreamCloseRequest struct {
 }
 
 func marshalEnvelope(result any, callErr *Error) ([]byte, bool) {
-	envelope := Envelope{OK: callErr == nil, Error: callErr}
 	if callErr == nil {
 		encoded, errMarshal := json.Marshal(result)
-		if errMarshal != nil {
-			envelope.OK = false
-			envelope.Error = &Error{Code: "internal", Message: "encode plugin result: " + errMarshal.Error()}
-		} else {
-			envelope.Result = encoded
+		if errMarshal == nil {
+			// Same bytes as marshaling Envelope, without rescanning a large result.
+			out := make([]byte, 0, len(encoded)+len(`{"ok":true,"result":}`))
+			out = append(out, `{"ok":true,"result":`...)
+			out = append(out, encoded...)
+			return append(out, '}'), true
 		}
+		callErr = &Error{Code: "internal", Message: "encode plugin result: " + errMarshal.Error()}
 	}
-	encoded, _ := json.Marshal(envelope)
-	return encoded, envelope.OK
+	encoded, _ := json.Marshal(Envelope{Error: callErr})
+	return encoded, false
 }
