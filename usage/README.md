@@ -80,7 +80,7 @@ an estimate unless the host's terminal usage record is already correct.
 
 ## Reproduce
 
-Go 1.26 and a C compiler are required. The native plugin itself always requires
+Go 1.27 and a C compiler are required. The native plugin itself always requires
 CGO because it is built with `-buildmode=c-shared`; `plugin_purego` only changes
 the host loader.
 

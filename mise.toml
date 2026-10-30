@@ -1,5 +1,5 @@
 [tools]
-go = "1.26.6"
+go = "1.27.3"
 actionlint = "1.7.12"
 
 [tasks.compile]
@@ -20,7 +20,7 @@ run = "go test -race -count=2 -shuffle=on ./..."
 
 [tasks.vuln]
 description = "Check reachable vulnerabilities in release plugin sources"
-run = "go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./commandcode ./chatgpt-backend ./embeddings-forward"
+run = "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./commandcode ./chatgpt-backend ./embeddings-forward"
 
 [tasks.package]
 description = "Package clean source: VERSION required, ARCH=amd64 or arm64, CC for cross builds"
