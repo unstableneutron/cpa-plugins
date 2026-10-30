@@ -134,7 +134,7 @@ def smoke(version, arch, directory, commit, cgo, purego):
                     if runner:
                         command += ["--runner", *runner]
                     subprocess.run(command, check=True)
-            command = [sys.executable, "-B", "tests/forward_e2e.py", "--host", str(host), "--plugins", str(libs)]
+            command = [sys.executable, "-B", "tests/forward_e2e.py", "--arch", arch, "--host", str(host), "--plugins", str(libs)]
             subprocess.run(command + (["--runner", *runner] if runner else []), check=True)
     source(commit)
     # Detect binaries or ZIPs replaced while qualification was running.

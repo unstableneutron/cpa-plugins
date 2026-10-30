@@ -158,9 +158,9 @@ plugins:
 '''
 
 
-def qualify(host, plugins, runner=()):
+def qualify(host, plugins, target_arch=None, runner=()):
     system = {"Linux": "linux", "Darwin": "darwin"}[platform.system()]
-    arch = {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
+    arch = target_arch or {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[platform.machine()]
     extension = {"linux": ".so", "darwin": ".dylib"}[system]
     with tempfile.TemporaryDirectory(prefix="cpa-forward-e2e-") as temporary:
         root = Path(temporary)
@@ -270,6 +270,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Path, required=True)
     parser.add_argument("--plugins", type=Path, required=True)
+    parser.add_argument("--arch", choices=("amd64", "arm64"))
     parser.add_argument("--runner", nargs=argparse.REMAINDER, default=[])
     args = parser.parse_args()
-    qualify(args.host.resolve(), args.plugins.resolve(), args.runner)
+    qualify(args.host.resolve(), args.plugins.resolve(), args.arch, args.runner)

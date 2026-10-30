@@ -80,6 +80,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(sum("--environment-auth" in cmd for cmd in commands), 4)
             self.assertEqual(sum("tests/native_e2e.py" in cmd for cmd in commands), 8)
             self.assertEqual(sum("tests/forward_e2e.py" in cmd for cmd in commands), 2)
+            # The host, not this machine, selects the plugin directory (qemu arm64 runs).
+            self.assertTrue(all("--arch" in cmd for cmd in commands if "tests/forward_e2e.py" in cmd))
             self.assertEqual(release.manifest(directory, release.archives(VERSION, "amd64")), before)
             execute.side_effect = subprocess.CalledProcessError(1, "fixture")
             with self.assertRaises(subprocess.CalledProcessError):
