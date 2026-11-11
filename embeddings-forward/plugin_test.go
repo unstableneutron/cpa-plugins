@@ -686,3 +686,176 @@ rerank:
 		t.Fatal("a rejected reconfigure replaced the working config")
 	}
 }
+
+func TestModuleRetryRounds(t *testing.T) {
+	for _, mod := range []struct {
+		name string
+		path string
+	}{
+		{"embeddings", routeEmbeddings}, {"rerank", routeRerank},
+		{"decisions", routeDecisions}, {"systemone", routeSystemOne},
+	} {
+		for _, tc := range []struct {
+			name     string
+			setting  string
+			statuses []int
+			calls    int
+			status   int
+		}{
+			{"default unchanged", "", []int{503}, 1, 503},
+			{"explicit zero", "retries: 0", []int{503}, 1, 503},
+			{"success stops", "retries: 2", []int{200}, 1, 200},
+			{"recover 5xx", "retries: 1", []int{503, 200}, 2, 200},
+			{"recover transport", "retries: 1", []int{0, 200}, 2, 200},
+			{"recover quota", "retries: 1", []int{429, 200}, 2, 200},
+			{"recover credits", "retries: 1", []int{402, 200}, 2, 200},
+			{"bounded", "retries: 2", []int{503}, 3, 503},
+			{"400 final", "retries: 2", []int{400, 200}, 1, 400},
+			{"401 final", "retries: 2", []int{401, 200}, 1, 401},
+			{"403 final", "retries: 2", []int{403, 200}, 1, 403},
+		} {
+			t.Run(mod.name+"/"+tc.name, func(t *testing.T) {
+				h := newTestHandler(t, fmt.Sprintf("%s:\n  enabled: true\n  %s\n  providers: [{name: p, base_url: 'https://unused.invalid', api_keys: [k]}]\n", mod.name, tc.setting))
+				var mu sync.Mutex
+				calls := 0
+				h.do = func(req hostHTTPRequest) (hostHTTPResponse, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					status := tc.statuses[min(calls, len(tc.statuses)-1)]
+					calls++
+					if status == 0 {
+						return hostHTTPResponse{}, fmt.Errorf("transport failure")
+					}
+					body := `{"answers":{"q":{"value":"<&>"}}}`
+					if status != 200 {
+						body = `{"error":{"message":"failed"}}`
+					}
+					return hostHTTPResponse{StatusCode: status, Body: []byte(body)}, nil
+				}
+				resp := h.post(mod.path, `{"model":"m","input":"x","query":"q","documents":["d"],"questions":{"q":{"type":"noul","instructions":"choose"}}}`, nil)
+				if calls != tc.calls || resp.StatusCode != tc.status {
+					t.Fatalf("attempts = %d, status = %d; want %d, %d: %s", calls, resp.StatusCode, tc.calls, tc.status, resp.Body)
+				}
+				if resp.StatusCode == 200 && string(resp.Body) != `{"answers":{"q":{"value":"<&>"}}}` {
+					t.Fatalf("successful response changed: %s", resp.Body)
+				}
+			})
+		}
+	}
+}
+
+func TestRetryRoundReordersCoolingProvidersAndRotatesKeys(t *testing.T) {
+	h := newTestHandler(t, `
+embeddings:
+  enabled: true
+  retries: 1
+  providers:
+    - {name: primary, base_url: 'https://primary.invalid', api_keys: [a], cooldown_seconds: 60}
+    - {name: backup, base_url: 'https://backup.invalid', api_keys: [b1, b2], strategy: round_robin}
+`)
+	var attempts []string
+	h.do = func(req hostHTTPRequest) (hostHTTPResponse, error) {
+		key := headerValue(req.Headers, "Authorization")
+		attempts = append(attempts, key)
+		status := http.StatusServiceUnavailable
+		if key == "Bearer a" {
+			status = http.StatusTooManyRequests
+		} else if key == "Bearer b2" {
+			status = http.StatusOK
+		}
+		return hostHTTPResponse{StatusCode: status, Body: []byte(`{}`)}, nil
+	}
+	resp := h.post(routeEmbeddings, `{"model":"m","input":"x"}`, nil)
+	if resp.StatusCode != 200 || strings.Join(attempts, ",") != "Bearer a,Bearer b1,Bearer b2" {
+		t.Fatalf("status = %d, attempts = %v", resp.StatusCode, attempts)
+	}
+}
+
+func TestDecisionRetriesRetainSuccessfulBatches(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+	upstream := newFixture(t, func(req seenRequest) (int, string, string) {
+		questions, _ := orderedObject(req.body["questions"])
+		if len(questions) != 1 {
+			t.Errorf("batch = %s", req.body["questions"])
+			return http.StatusBadRequest, "", `{}`
+		}
+		key := questions[0].key
+		mu.Lock()
+		counts[key]++
+		count := counts[key]
+		mu.Unlock()
+		assets, _ := orderedObject(req.body["assets"])
+		if len(assets) != 1 || assets[0].key != "img-"+key {
+			t.Errorf("question %s assets = %s", key, req.body["assets"])
+		}
+		if key == "b" && count == 1 {
+			return http.StatusServiceUnavailable, "", `{"error":{"message":"temporary"}}`
+		}
+		return http.StatusOK, "", answerAll(req, "")
+	})
+	h := newTestHandler(t, fmt.Sprintf(`
+decisions:
+  enabled: true
+  retries: 1
+  providers:
+    - {name: p, base_url: %s, api_keys: [k], max_questions: 1, max_concurrency: 2}
+`, upstream.server.URL))
+	body := `{"model":"m","state":"s","assets":{"img-a":{"format":"png","data_base64":"QQ=="},"img-b":{"format":"png","data_base64":"Qg=="}},"questions":{"a":{"type":"noul","instructions":"img-a"},"b":{"type":"noul","instructions":"img-b"}}}`
+	resp := h.post(routeDecisions, body, nil)
+	answers, ok := parseAnswers(resp.Body)
+	if resp.StatusCode != 200 || !ok || len(answers) != 2 {
+		t.Fatalf("response = %d %s", resp.StatusCode, resp.Body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if counts["a"] != 1 || counts["b"] != 2 {
+		t.Fatalf("attempt counts = %v", counts)
+	}
+	var merged struct {
+		Usage map[string]float64 `json:"usage"`
+	}
+	if err := json.Unmarshal(resp.Body, &merged); err != nil || merged.Usage["input_tokens"] != 2 || merged.Usage["output_tokens"] != 2 {
+		t.Fatalf("merged usage = %s: %v", resp.Body, err)
+	}
+}
+
+func TestRetryConfigAndForkMetadata(t *testing.T) {
+	for _, name := range []string{"embeddings", "rerank", "decisions", "systemone"} {
+		if _, err := parseConfig([]byte(name + ": {retries: -1}")); err == nil {
+			t.Errorf("%s: negative retries accepted", name)
+		}
+	}
+	cfg, err := parseConfig([]byte(`
+decisions:
+  enabled: true
+  retries: 1
+  providers: [{name: d, base_url: 'https://d.invalid', api_keys: [k]}]
+systemone:
+  enabled: true
+  retries: 2
+  providers: [{name: s, base_url: 'https://s.invalid', api_keys: [k]}]
+`))
+	if err != nil || cfg.Decisions.Retries != 2 || len(cfg.Decisions.Providers) != 2 {
+		t.Fatalf("shared retry config = %+v: %v", cfg.Decisions, err)
+	}
+	original := nativeabi.Version
+	defer func() { nativeabi.Version = original }()
+	for _, version := range []string{"dev", "0.2.1-test"} {
+		nativeabi.Version = version
+		h := newHandler()
+		result, callErr := h.Call(nativeabi.MethodPluginRegister, mustJSON(lifecycleRequest{}))
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		reg := result.(registration)
+		want := version
+		if version == "dev" {
+			want = "0.2.1"
+		}
+		if reg.Metadata.Version != want || reg.Metadata.Name != "Embeddings, rerank and decisions forward" ||
+			reg.Metadata.GitHubRepository != "https://github.com/unstableneutron/cpa-plugins" || reg.SchemaVersion != 9 {
+			t.Fatalf("fork registration = %+v", reg)
+		}
+	}
+}

@@ -22,6 +22,20 @@ Requires a CPA host with plugin schema 9 (body-aware ingress handler routes),
 `unstableneutron/CLIProxyAPI` v8.0.48-un.1 or later. Older hosts reject the
 library at registration instead of serving it partially.
 
+The current compatibility target is `v8.0.60-un.1` (latest fork release
+checked 2026-11-11). Plugins use the stable native C ABI, not a Go module
+dependency on CPA, so host upgrades do not require linking CPA's Go packages.
+
+## Fork identity and plugin-store warning
+
+This fork's version is **0.2.1**, distinct from the official plugin's 0.5.0.
+The plugin ID/library name stays `embeddings-forward` and existing
+`plugins.configs.embeddings-forward` configuration remains compatible.
+Installing or updating the official store plugin with that same ID **replaces
+this fork** and removes its standard client-key routes. A different version
+does not prevent replacement: install this repository's artifacts explicitly,
+and do not select the official store entry to update this fork.
+
 ## Behaviour
 
 - **Routing.** The JSON `model` selects providers in config order. A model
@@ -36,6 +50,12 @@ library at registration instead of serving it partially.
   Providers whose keys are all cooling are tried last. Cooling keys are still
   tried, so cooldown alone never fails a request. `strategy: round_robin`
   rotates the first key per request. This state is in memory.
+- **Retries.** Module-level `retries` defaults to 0 (existing behavior). A
+  positive value adds that many rounds through matching providers after
+  transport errors, 429, 402 or 5xx exhaust the pool. Non-retryable errors,
+  including 400, still return immediately. Each round re-evaluates cooldown
+  and key strategy; there is no sleep or backoff. Decision retries send only
+  unanswered questions, retaining successful batches and their usage.
 - **Batching.** A decision request with more questions than a provider's
   `max_questions` is split into batches sent concurrently, at most
   `max_concurrency` (default 4) at a time. A batch that fails with a retryable
@@ -73,6 +93,7 @@ plugins:
       enabled: true          # the host loads only enabled plugin IDs
       embeddings:            # rerank has the same shape
         enabled: true
+        retries: 0           # optional extra provider-pool rounds
         providers:
           - name: tokenrouter                      # unique per module
             base_url: https://api.tokenrouter.com/v1
@@ -106,6 +127,8 @@ decisions`) and `/v1/systemone` (`api: systemone`), appended to `base_url`.
 at load or reconfigure; the error names the field but never a key. The
 upstream plugin's modular `systemone` module is still accepted: its providers
 join the decisions pool with `api: systemone`.
+If both `decisions` and `systemone` are enabled, their shared pool uses the
+larger `retries` value. Negative retry counts are rejected.
 
 ### vn3 rollout example
 
@@ -237,6 +260,8 @@ Extracted from upstream `main.go` and adapted:
 - top-level `model` rewrite (`plugin.go`)
 - failover and round-robin key ordering with 429 cooldown (`forward.go`)
 - `TypeSafe-Danger-Zone-*` header forwarding (`plugin.go`)
+- per-module retry rounds, restricted to retryable failures (`forward.go`,
+  `decisions.go`)
 
 The C shim follows this repository's `chatgpt-backend/main.go` instead of
 upstream's. Upstream `main_test.go` was not extracted; the tests are new.
@@ -247,4 +272,15 @@ decision routes with shape translation; question batching and merging; 402
 handling, `Retry-After`, cooldown-aware provider order and provider failover
 on 5xx; structured errors; and `string_instructions`. The flat
 single-provider fields (`upstream_*`, `rerank_*`, `decisions_*`,
-`systemone_*`) and module `retries` were removed; use the modular objects.
+`systemone_*`) remain removed; use the modular objects.
+
+### 0.2.1 upstream review
+
+The v0.3.0–v0.5.0 changes were reviewed. Jev/System One support, raw response
+preservation (schema 9 exceeds upstream's schema 6 requirement), and
+decision-only danger-zone headers were already present, as were strategy and
+cooldown. Flat-field migration does not apply to this fork's modular-only
+configuration. The omitted v0.5.0 `retries` feature is now adapted above:
+unlike upstream, it never repeats non-retryable 4xx responses or already
+answered decision questions. Go dependencies were refreshed for this source
+update; no routes or existing configuration defaults changed.
