@@ -137,6 +137,7 @@ type call struct {
 	h          *handler
 	callbackID string
 	module     string
+	retries    int
 }
 
 // tryProvider sends body to one provider, rotating keys on 429/402.
@@ -170,14 +171,18 @@ func (c call) tryProvider(m match, body []byte, extra map[string][]string) (upst
 // forward tries matching providers in order until one gives a non-retryable answer.
 func (c call) forward(matches []match, body func(match) []byte) upstreamResult {
 	var last upstreamResult
-	for _, m := range c.h.keys.order(matches) {
-		result, out := c.tryProvider(m, body(m), nil)
-		last = result
-		if out == outcomeSuccess || out == outcomeFinal {
-			return result
+	for round := 0; ; round++ {
+		for _, m := range c.h.keys.order(matches) {
+			result, out := c.tryProvider(m, body(m), nil)
+			last = result
+			if out == outcomeSuccess || out == outcomeFinal {
+				return result
+			}
+		}
+		if round >= c.retries {
+			return last
 		}
 	}
-	return last
 }
 
 func retryAfter(headers map[string][]string) time.Duration {

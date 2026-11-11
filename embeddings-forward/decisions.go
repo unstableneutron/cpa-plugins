@@ -38,52 +38,57 @@ func (c call) decide(matches []match, top map[string]json.RawMessage, headers ma
 	answers := make(map[string]json.RawMessage, len(questions))
 	var successes []upstreamResult
 	var last upstreamResult
-	for _, m := range c.h.keys.order(matches) {
-		if len(pending) == 0 {
+	for round := 0; ; round++ {
+		for _, m := range c.h.keys.order(matches) {
+			if len(pending) == 0 {
+				break
+			}
+			batches := split(pending, m.provider.MaxQuestions)
+			results := make([]batchResult, len(batches))
+			limit := make(chan struct{}, m.provider.MaxConcurrency)
+			var wg sync.WaitGroup
+			for i, batch := range batches {
+				wg.Add(1)
+				limit <- struct{}{}
+				go func() {
+					defer wg.Done()
+					defer func() { <-limit }()
+					body := decisionBody(top, m, batch, len(batch) != len(questions))
+					result, out := c.tryProvider(m, body, headers)
+					results[i] = batchResult{result: result, outcome: out}
+				}()
+			}
+			wg.Wait()
+			var retry []field
+			for i, batch := range batches {
+				r := results[i]
+				if r.outcome == outcomeFinal {
+					c.h.log(c.callbackID, "warn", "embeddings-forward: request failed", map[string]any{"module": c.module, "provider": r.result.provider, "status": r.result.status})
+					return clientResponse(r.result)
+				}
+				if r.outcome == outcomeSuccess {
+					got, ok := parseAnswers(r.result.body)
+					if ok {
+						successes = append(successes, r.result)
+						for _, q := range batch {
+							if answer, found := got[q.key]; found {
+								answers[q.key] = answer
+							} else {
+								retry = append(retry, q)
+							}
+						}
+						continue
+					}
+					r.result.malformed = true
+				}
+				last = r.result
+				retry = append(retry, batch...)
+			}
+			pending = retry
+		}
+		if len(pending) == 0 || round >= c.retries {
 			break
 		}
-		batches := split(pending, m.provider.MaxQuestions)
-		results := make([]batchResult, len(batches))
-		limit := make(chan struct{}, m.provider.MaxConcurrency)
-		var wg sync.WaitGroup
-		for i, batch := range batches {
-			wg.Add(1)
-			limit <- struct{}{}
-			go func() {
-				defer wg.Done()
-				defer func() { <-limit }()
-				body := decisionBody(top, m, batch, len(batches) > 1)
-				result, out := c.tryProvider(m, body, headers)
-				results[i] = batchResult{result: result, outcome: out}
-			}()
-		}
-		wg.Wait()
-		var retry []field
-		for i, batch := range batches {
-			r := results[i]
-			if r.outcome == outcomeFinal {
-				c.h.log(c.callbackID, "warn", "embeddings-forward: request failed", map[string]any{"module": c.module, "provider": r.result.provider, "status": r.result.status})
-				return clientResponse(r.result)
-			}
-			if r.outcome == outcomeSuccess {
-				got, ok := parseAnswers(r.result.body)
-				if ok {
-					successes = append(successes, r.result)
-					for _, q := range batch {
-						if answer, found := got[q.key]; found {
-							answers[q.key] = answer
-						} else {
-							retry = append(retry, q)
-						}
-					}
-					continue
-				}
-				r.result.malformed = true
-			}
-			last = r.result
-			retry = append(retry, batch...)
-		}
-		pending = retry
 	}
 	if len(pending) > 0 {
 		c.h.log(c.callbackID, "warn", "embeddings-forward: request failed", map[string]any{"module": c.module, "provider": last.provider, "status": last.status, "unanswered": len(pending)})

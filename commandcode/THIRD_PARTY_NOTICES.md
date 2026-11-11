@@ -2,7 +2,7 @@
 
 The Command Code native library includes the following third-party software.
 
-## github.com/tiktoken-go/tokenizer v0.8.1
+## github.com/tiktoken-go/tokenizer v0.10.0
 
 MIT License
 
@@ -26,7 +26,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## github.com/dlclark/regexp2/v2 v2.5.1
+## github.com/dlclark/regexp2/v2 v2.13.0
 
 The MIT License (MIT)
 
@@ -80,7 +80,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## github.com/tidwall/gjson v1.18.0 and github.com/tidwall/match v1.1.1
+## github.com/tidwall/gjson v1.20.2 and github.com/tidwall/match v1.2.0
 
 The MIT License (MIT)
 
@@ -103,7 +103,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## github.com/tidwall/pretty v1.2.0
+## github.com/tidwall/pretty v1.3.0
 
 The MIT License (MIT)
 

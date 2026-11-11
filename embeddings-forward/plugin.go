@@ -83,9 +83,9 @@ type ingressResponse struct {
 }
 
 var configFields = []configField{
-	{Name: "embeddings", Type: "object", Description: "OpenAI embeddings providers for POST /v1/embeddings: enabled, providers[] with name, base_url, path, api_keys, models[{name, alias}], strategy, cooldown_seconds."},
+	{Name: "embeddings", Type: "object", Description: "OpenAI embeddings providers for POST /v1/embeddings: enabled, retries (extra rounds, default 0), providers[] with name, base_url, path, api_keys, models[{name, alias}], strategy, cooldown_seconds."},
 	{Name: "rerank", Type: "object", Description: "Cohere rerank providers for POST /v1/rerank, same shape as embeddings."},
-	{Name: "decisions", Type: "object", Description: "Decision-model providers shared by POST /v1/systemone and POST /api/alpha/decisions. Per provider also api (decisions|systemone), max_questions and max_concurrency."},
+	{Name: "decisions", Type: "object", Description: "Decision-model providers shared by POST /v1/systemone and POST /api/alpha/decisions: enabled, retries (extra rounds, default 0), providers. Per provider also api (decisions|systemone), max_questions and max_concurrency."},
 }
 
 func newHandler() *handler {
@@ -122,11 +122,15 @@ func (h *handler) Call(method string, request json.RawMessage) (any, *nativeabi.
 		h.mu.Lock()
 		h.cfg = cfg
 		h.mu.Unlock()
+		version := nativeabi.Version
+		if version == "dev" {
+			version = "0.2.1"
+		}
 		return registration{
 			SchemaVersion: nativeabi.SchemaVersionIngressHandler,
 			Metadata: metadata{
 				Name:             "Embeddings, rerank and decisions forward",
-				Version:          nativeabi.Version,
+				Version:          version,
 				Author:           "unstableneutron (fork of KorenKrita/cliproxy-embeddings-rerank-forward)",
 				GitHubRepository: "https://github.com/unstableneutron/cpa-plugins",
 				ConfigFields:     configFields,
@@ -200,7 +204,7 @@ func (h *handler) handle(req ingressRequest) (directResponse, bool) {
 	if len(matches) == 0 {
 		return errorResponse(http.StatusNotFound, "invalid_request_error", "model_not_found", "model is not configured: "+model, ""), true
 	}
-	c := call{h: h, callbackID: req.HostCallbackID, module: name}
+	c := call{h: h, callbackID: req.HostCallbackID, module: name, retries: mod.Retries}
 	if name == "decisions" {
 		return c.decide(matches, top, dangerZoneHeaders(req.Headers)), true
 	}

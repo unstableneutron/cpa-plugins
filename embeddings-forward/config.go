@@ -48,6 +48,7 @@ type provider struct {
 
 type module struct {
 	Enabled   bool       `yaml:"enabled"`
+	Retries   int        `yaml:"retries"`
 	Providers []provider `yaml:"providers"`
 }
 
@@ -65,6 +66,17 @@ func parseConfig(raw []byte) (pluginConfig, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return pluginConfig{}, fmt.Errorf("parse config: %w", err)
 	}
+	for _, m := range []struct {
+		name    string
+		retries int
+	}{
+		{"embeddings", cfg.Embeddings.Retries}, {"rerank", cfg.Rerank.Retries},
+		{"decisions", cfg.Decisions.Retries}, {"systemone", cfg.SystemOne.Retries},
+	} {
+		if m.retries < 0 {
+			return pluginConfig{}, fmt.Errorf("%s: retries must not be negative", m.name)
+		}
+	}
 	if cfg.SystemOne.Enabled {
 		for _, p := range cfg.SystemOne.Providers {
 			if p.API == "" {
@@ -73,6 +85,7 @@ func parseConfig(raw []byte) (pluginConfig, error) {
 			cfg.Decisions.Providers = append(cfg.Decisions.Providers, p)
 		}
 		cfg.Decisions.Enabled = true
+		cfg.Decisions.Retries = max(cfg.Decisions.Retries, cfg.SystemOne.Retries)
 	}
 	cfg.SystemOne = module{}
 	for _, m := range []struct {
