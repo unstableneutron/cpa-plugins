@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,8 @@ const (
 	methodIngressRegister = "ingress.register"
 	methodIngressHandle   = "ingress.handle"
 	backendPathPrefix     = "/backend-api/"
+	codexModelsPath       = "/backend-api/codex/models"
+	hostModelsPath        = "/v1/models"
 	accountIDHeader       = "ChatGPT-Account-ID"
 	defaultBaseURL        = "https://chatgpt.com"
 )
@@ -32,14 +35,17 @@ var ingressMethods = []string{
 }
 
 type config struct {
-	BaseURL string `yaml:"base-url"`
+	BaseURL            string `yaml:"base-url"`
+	CodexModelsHostURL string `yaml:"codex-models-host-url"`
 }
 
 type handler struct {
-	mu        sync.RWMutex
-	baseURL   string
-	origin    string
-	transport string
+	mu                sync.RWMutex
+	baseURL           string
+	origin            string
+	transport         string
+	codexModelsURL    string
+	codexModelsOrigin string
 }
 
 type lifecycleRequest struct {
@@ -149,13 +155,21 @@ func (h *handler) Call(method string, request json.RawMessage) (any, *nativeabi.
 	case methodIngressRegister:
 		h.mu.RLock()
 		origin := h.origin
+		codexModelsOrigin := h.codexModelsOrigin
 		h.mu.RUnlock()
-		return ingressRegistrationResponse{Routes: []ingressRoute{{
+		route := ingressRoute{
 			Methods:         append([]string(nil), ingressMethods...),
 			PathPrefix:      backendPathPrefix,
 			RequiredHeaders: []string{"Authorization", accountIDHeader},
 			UpstreamOrigins: []string{origin},
-		}}}, nil
+		}
+		if codexModelsOrigin != "" {
+			route.RequiredHeaders = []string{"Authorization"}
+			if codexModelsOrigin != origin {
+				route.UpstreamOrigins = append(route.UpstreamOrigins, codexModelsOrigin)
+			}
+		}
+		return ingressRegistrationResponse{Routes: []ingressRoute{route}}, nil
 	case methodIngressHandle:
 		var req ingressRequest
 		if err := json.Unmarshal(request, &req); err != nil {
@@ -184,6 +198,14 @@ func (h *handler) configure(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	codexModelsURL, codexModelsOrigin := "", ""
+	if strings.TrimSpace(cfg.CodexModelsHostURL) != "" {
+		hostURL, hostOrigin, errHost := normalizeBaseURL(cfg.CodexModelsHostURL)
+		if errHost != nil {
+			return fmt.Errorf("codex-models-host-url: %w", errHost)
+		}
+		codexModelsURL, codexModelsOrigin = hostURL+hostModelsPath, hostOrigin
+	}
 	h.mu.Lock()
 	h.baseURL = baseURL
 	h.origin = origin
@@ -192,6 +214,8 @@ func (h *handler) configure(raw []byte) error {
 	} else {
 		h.transport = "utls"
 	}
+	h.codexModelsURL = codexModelsURL
+	h.codexModelsOrigin = codexModelsOrigin
 	h.mu.Unlock()
 	return nil
 }
@@ -224,7 +248,7 @@ func (h *handler) handleIngress(req ingressRequest) ingressResponse {
 	}
 	accountID := strings.TrimSpace(firstHeader(req.Headers, accountIDHeader))
 	if accountID == "" {
-		return ingressResponse{}
+		return h.handleCodexModels(req)
 	}
 	escapedPath := req.EscapedPath
 	if escapedPath == "" {
@@ -258,6 +282,22 @@ func (h *handler) handleIngress(req ingressRequest) ingressResponse {
 				FallbackToInbound: true,
 			},
 		},
+	}
+}
+
+func (h *handler) handleCodexModels(req ingressRequest) ingressResponse {
+	h.mu.RLock()
+	upstreamURL := h.codexModelsURL
+	h.mu.RUnlock()
+	if upstreamURL == "" || req.Method != http.MethodGet || req.Path != codexModelsPath {
+		return ingressResponse{}
+	}
+	if req.RawQuery != "" {
+		upstreamURL += "?" + req.RawQuery
+	}
+	return ingressResponse{
+		Handled: true,
+		Plan:    &ingressProxyPlan{UpstreamURL: upstreamURL, Transport: "standard"},
 	}
 }
 

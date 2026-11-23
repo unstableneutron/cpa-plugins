@@ -19,7 +19,18 @@ plugins:
   configs:
     chatgpt-backend:
       base-url: https://chatgpt.com
+      # Optional: answer GET /backend-api/codex/models from the host's own catalog
+      codex-models-host-url: http://127.0.0.1:8317
 ```
+
+With `codex-models-host-url` set, a `GET /backend-api/codex/models` request
+that has no `ChatGPT-Account-ID` is proxied to that host's `/v1/models` with
+the original query and the inbound `Authorization`. Codex-style clients that
+send `client_version` (Codex CLI, omp) get CPA's Codex client catalog,
+including each model's `service_tiers`. Every other `/backend-api/` request
+without the account header stays unhandled, as before. The route then requires
+only `Authorization`, so unauthenticated `/backend-api/` requests get the host's
+authentication error instead of a 404
 
 Build with the release version injected into the shared native helper:
 
