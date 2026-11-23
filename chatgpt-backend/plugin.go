@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -200,11 +202,11 @@ func (h *handler) configure(raw []byte) error {
 	}
 	codexModelsURL, codexModelsOrigin := "", ""
 	if strings.TrimSpace(cfg.CodexModelsHostURL) != "" {
-		hostURL, hostOrigin, errHost := normalizeBaseURL(cfg.CodexModelsHostURL)
+		hostOrigin, errHost := normalizeLoopbackOrigin(cfg.CodexModelsHostURL)
 		if errHost != nil {
 			return fmt.Errorf("codex-models-host-url: %w", errHost)
 		}
-		codexModelsURL, codexModelsOrigin = hostURL+hostModelsPath, hostOrigin
+		codexModelsURL, codexModelsOrigin = hostOrigin+hostModelsPath, hostOrigin
 	}
 	h.mu.Lock()
 	h.baseURL = baseURL
@@ -240,6 +242,28 @@ type errInvalidBaseURL struct{}
 
 func (errInvalidBaseURL) Error() string {
 	return "base-url must be an HTTP(S) origin or base path without credentials, query, or fragment"
+}
+
+func normalizeLoopbackOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
+		return "", errNotLoopbackOrigin{}
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	port, errPort := strconv.Atoi(parsed.Port())
+	if ip == nil || !ip.IsLoopback() || errPort != nil || port < 1 || port > 65535 {
+		return "", errNotLoopbackOrigin{}
+	}
+	return "http://" + parsed.Host, nil
+}
+
+type errNotLoopbackOrigin struct{}
+
+func (errNotLoopbackOrigin) Error() string {
+	return "must be http://<loopback IP>:<port> with no path, credentials, query, or fragment"
 }
 
 func (h *handler) handleIngress(req ingressRequest) ingressResponse {

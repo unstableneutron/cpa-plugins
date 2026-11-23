@@ -167,11 +167,32 @@ func TestCodexModelsFallbackIsOffByDefault(t *testing.T) {
 	}
 }
 
-func TestRegisterRejectsUnsafeCodexModelsHostURL(t *testing.T) {
+func TestCodexModelsHostURLMustBeLiteralLoopback(t *testing.T) {
+	for _, raw := range []string{
+		"http://10.0.0.5:8317",
+		"http://example.test:8317",
+		"http://localhost:8317",
+		"https://127.0.0.1:8317",
+		"http://127.0.0.1",
+		"http://127.0.0.1:8317/v1",
+		"http://127.0.0.1:8317/?x=1",
+		"http://user:pass@127.0.0.1:8317",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			h := newHandler()
+			_, callErr := h.Call(nativeabi.MethodPluginRegister, mustJSON(t, lifecycleRequest{ConfigYAML: []byte("codex-models-host-url: \"" + raw + "\"\n")}))
+			if callErr == nil || callErr.Code != "invalid_config" {
+				t.Fatalf("error = %#v, want invalid_config", callErr)
+			}
+		})
+	}
 	h := newHandler()
-	_, callErr := h.Call(nativeabi.MethodPluginRegister, mustJSON(t, lifecycleRequest{ConfigYAML: []byte("codex-models-host-url: http://127.0.0.1:8317/?x=1\n")}))
-	if callErr == nil || callErr.Code != "invalid_config" {
-		t.Fatalf("error = %#v, want invalid_config", callErr)
+	if _, callErr := h.Call(nativeabi.MethodPluginRegister, mustJSON(t, lifecycleRequest{ConfigYAML: []byte("codex-models-host-url: \"http://[::1]:8317\"\n")})); callErr != nil {
+		t.Fatalf("IPv6 loopback rejected: %v", callErr)
+	}
+	result, _ := h.Call(methodIngressHandle, mustJSON(t, ingressRequest{Method: "GET", Path: codexModelsPath, PresentHeaders: []string{"Authorization"}}))
+	if got, want := result.(ingressResponse).Plan.UpstreamURL, "http://[::1]:8317/v1/models"; got != want {
+		t.Fatalf("upstream URL = %q, want %q", got, want)
 	}
 }
 

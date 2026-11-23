@@ -25,7 +25,9 @@ plugins:
 
 With `codex-models-host-url` set, a `GET /backend-api/codex/models` request
 that has no `ChatGPT-Account-ID` is proxied to that host's `/v1/models` with
-the original query and the inbound `Authorization`. Codex-style clients that
+the original query and the inbound `Authorization`. Because the caller's CPA key
+is forwarded, the value must be CPA's own listener as `http://<loopback IP>:<port>`;
+hostnames, other addresses, HTTPS and paths are rejected. Codex-style clients that
 send `client_version` (Codex CLI, omp) get CPA's Codex client catalog,
 including each model's `service_tiers`. Every other `/backend-api/` request
 without the account header stays unhandled, as before. The route then requires
